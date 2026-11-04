@@ -4,3 +4,4 @@ release-license.patch
 remove-user-limits.patch
 about-dialog.patch
 optional-policy-links.patch
+openid-connect.patch

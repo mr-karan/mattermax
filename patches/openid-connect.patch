@@ -1,0 +1,642 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 16:13:21 +0530
+Subject: [PATCH] feat: sso using oidc provider
+
+Sign in with any OpenID Connect provider without a license. A new
+provider (`server/channels/app/oauthproviders/openid/`) finds the provider's
+endpoints from `OpenIdSettings.DiscoveryEndpoint` and reads the user from the
+UserInfo endpoint; it is registered in `server/cmd/mattermost/main.go`. The
+client config sends the OpenID login button settings without a license
+(`server/config/client.go`), and the System Console shows the OpenID Connect
+page instead of its upgrade page, offering only "OpenID Connect (Other)"
+(`admin_definition.tsx`). Written from the OpenID Connect specifications and
+Mattermost's open-source OAuth code, without consulting Mattermost's
+enterprise code.
+
+Mattermax-Patch: openid-connect.patch
+---
+ .../app/oauthproviders/openid/openid.go       | 273 ++++++++++++++++++
+ .../app/oauthproviders/openid/openid_test.go  | 225 +++++++++++++++
+ server/cmd/mattermost/main.go                 |   1 +
+ server/config/client.go                       |   6 +-
+ server/config/client_test.go                  |  17 ++
+ .../admin_console/admin_definition.tsx        |   8 +-
+ 6 files changed, 523 insertions(+), 7 deletions(-)
+ create mode 100644 server/channels/app/oauthproviders/openid/openid.go
+ create mode 100644 server/channels/app/oauthproviders/openid/openid_test.go
+
+diff --git a/server/channels/app/oauthproviders/openid/openid.go b/server/channels/app/oauthproviders/openid/openid.go
+new file mode 100644
+index 000000000000..13e0166a4f19
+--- /dev/null
++++ b/server/channels/app/oauthproviders/openid/openid.go
+@@ -0,0 +1,273 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++// Package oauthopenid signs users in with any OpenID Connect provider. It
++// finds the provider's endpoints with OpenID Connect Discovery and reads the
++// user from the UserInfo endpoint, which the server calls over TLS with the
++// access token it received from the token endpoint.
++package oauthopenid
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"net/http"
++	"net/url"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/mattermost/mattermost/server/public/model"
++	"github.com/mattermost/mattermost/server/public/shared/request"
++	"github.com/mattermost/mattermost/server/v8/einterfaces"
++)
++
++const (
++	discoverySuffix   = "/.well-known/openid-configuration"
++	discoveryTTL      = time.Hour
++	discoveryTimeout  = 10 * time.Second
++	discoveryMaxBytes = 1 << 20
++)
++
++type discoveryDocument struct {
++	Issuer                string `json:"issuer"`
++	AuthorizationEndpoint string `json:"authorization_endpoint"`
++	TokenEndpoint         string `json:"token_endpoint"`
++	UserinfoEndpoint      string `json:"userinfo_endpoint"`
++}
++
++type cachedDocument struct {
++	doc       *discoveryDocument
++	fetchedAt time.Time
++}
++
++type OpenIDProvider struct {
++	client *http.Client
++
++	mu    sync.Mutex
++	cache map[string]cachedDocument
++}
++
++// userInfo holds the standard claims (OpenID Connect Core 1.0, section 5.1)
++// this provider uses.
++type userInfo struct {
++	Sub               string `json:"sub"`
++	Email             string `json:"email"`
++	EmailVerified     any    `json:"email_verified"`
++	Name              string `json:"name"`
++	GivenName         string `json:"given_name"`
++	FamilyName        string `json:"family_name"`
++	PreferredUsername string `json:"preferred_username"`
++}
++
++func init() {
++	einterfaces.RegisterOAuthProvider(model.ServiceOpenid, newProvider())
++}
++
++func newProvider() *OpenIDProvider {
++	return &OpenIDProvider{
++		client: &http.Client{Timeout: discoveryTimeout},
++		cache:  make(map[string]cachedDocument),
++	}
++}
++
++// GetSSOSettings returns a copy of the service's settings with the endpoints
++// filled in from its discovery document. The System Console clears the
++// endpoint settings and keeps only the discovery endpoint.
++func (p *OpenIDProvider) GetSSOSettings(rctx request.CTX, config *model.Config, service string) (*model.SSOSettings, error) {
++	sso := config.GetSSOService(service)
++	if sso == nil {
++		return nil, fmt.Errorf("no SSO settings for service %q", service)
++	}
++
++	discoveryURL := strings.TrimSpace(model.SafeDereference(sso.DiscoveryEndpoint))
++	if discoveryURL == "" {
++		return nil, errors.New("the OpenID Connect discovery endpoint is not set")
++	}
++
++	doc, err := p.discover(rctx.Context(), discoveryURL)
++	if err != nil {
++		return nil, err
++	}
++
++	settings := *sso
++	settings.AuthEndpoint = new(doc.AuthorizationEndpoint)
++	settings.TokenEndpoint = new(doc.TokenEndpoint)
++	settings.UserAPIEndpoint = new(doc.UserinfoEndpoint)
++	return &settings, nil
++}
++
++func (p *OpenIDProvider) discover(ctx context.Context, discoveryURL string) (*discoveryDocument, error) {
++	p.mu.Lock()
++	cached, ok := p.cache[discoveryURL]
++	p.mu.Unlock()
++	if ok && time.Since(cached.fetchedAt) < discoveryTTL {
++		return cached.doc, nil
++	}
++
++	doc, err := p.fetchDiscovery(ctx, discoveryURL)
++	if err != nil {
++		return nil, err
++	}
++
++	p.mu.Lock()
++	p.cache[discoveryURL] = cachedDocument{doc: doc, fetchedAt: time.Now()}
++	p.mu.Unlock()
++	return doc, nil
++}
++
++func (p *OpenIDProvider) fetchDiscovery(ctx context.Context, discoveryURL string) (*discoveryDocument, error) {
++	if err := checkEndpoint("discovery endpoint", discoveryURL); err != nil {
++		return nil, err
++	}
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
++	if err != nil {
++		return nil, fmt.Errorf("creating discovery request: %w", err)
++	}
++	req.Header.Set("Accept", "application/json")
++
++	resp, err := p.client.Do(req)
++	if err != nil {
++		return nil, fmt.Errorf("fetching discovery document: %w", err)
++	}
++	defer resp.Body.Close()
++
++	if resp.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("fetching discovery document: status %d", resp.StatusCode)
++	}
++
++	var doc discoveryDocument
++	if err := json.NewDecoder(io.LimitReader(resp.Body, discoveryMaxBytes)).Decode(&doc); err != nil {
++		return nil, fmt.Errorf("decoding discovery document: %w", err)
++	}
++
++	if err := doc.validate(discoveryURL); err != nil {
++		return nil, err
++	}
++	return &doc, nil
++}
++
++// validate checks the document as OpenID Connect Discovery 1.0 section 4.3
++// requires, and that every endpoint is usable.
++func (d *discoveryDocument) validate(discoveryURL string) error {
++	if d.Issuer == "" || strings.TrimSuffix(d.Issuer, "/")+discoverySuffix != discoveryURL {
++		return fmt.Errorf("discovery document issuer %q does not match the discovery endpoint %q", d.Issuer, discoveryURL)
++	}
++
++	endpoints := []struct{ name, value string }{
++		{"authorization_endpoint", d.AuthorizationEndpoint},
++		{"token_endpoint", d.TokenEndpoint},
++		{"userinfo_endpoint", d.UserinfoEndpoint},
++	}
++	for _, e := range endpoints {
++		if err := checkEndpoint(e.name, e.value); err != nil {
++			return err
++		}
++	}
++
++	// The login URL is built by appending "?response_type=..." to this
++	// endpoint, which only works if it has no query string of its own.
++	if strings.Contains(d.AuthorizationEndpoint, "?") {
++		return fmt.Errorf("authorization_endpoint %q has a query string, which is not supported", d.AuthorizationEndpoint)
++	}
++	return nil
++}
++
++// checkEndpoint requires an absolute HTTPS URL. Plain HTTP is allowed only to
++// a loopback address, for local testing.
++func checkEndpoint(name, value string) error {
++	u, err := url.Parse(value)
++	if err != nil || u.Host == "" {
++		return fmt.Errorf("%s %q is not an absolute URL", name, value)
++	}
++
++	switch u.Scheme {
++	case "https":
++		return nil
++	case "http":
++		if isLoopback(u.Hostname()) {
++			return nil
++		}
++	}
++	return fmt.Errorf("%s %q must use https", name, value)
++}
++
++func isLoopback(host string) bool {
++	if host == "localhost" {
++		return true
++	}
++	ip := net.ParseIP(host)
++	return ip != nil && ip.IsLoopback()
++}
++
++func (p *OpenIDProvider) GetUserFromJSON(rctx request.CTX, data io.Reader, _ *model.User, settings *model.SSOSettings) (*model.User, error) {
++	var info userInfo
++	if err := json.NewDecoder(data).Decode(&info); err != nil {
++		return nil, fmt.Errorf("decoding userinfo response: %w", err)
++	}
++
++	if err := info.validate(); err != nil {
++		return nil, err
++	}
++
++	return info.toUser(rctx, settings), nil
++}
++
++func (u *userInfo) validate() error {
++	if u.Sub == "" {
++		return errors.New("userinfo response has no sub claim")
++	}
++	if len(u.Sub) > model.UserAuthDataMaxLength {
++		return fmt.Errorf("sub claim is longer than %d characters", model.UserAuthDataMaxLength)
++	}
++	if u.Email == "" {
++		return errors.New("userinfo response has no email claim; request the email scope")
++	}
++	// Some providers send email_verified as a string.
++	if u.EmailVerified == false || u.EmailVerified == "false" {
++		return errors.New("the provider has not verified the user's email address")
++	}
++	return nil
++}
++
++func (u *userInfo) toUser(rctx request.CTX, settings *model.SSOSettings) *model.User {
++	email := strings.ToLower(u.Email)
++
++	username := strings.Split(email, "@")[0]
++	if settings != nil && model.SafeDereference(settings.UsePreferredUsername) && u.PreferredUsername != "" {
++		username = strings.Split(u.PreferredUsername, "@")[0]
++	}
++
++	firstName, lastName := u.GivenName, u.FamilyName
++	if firstName == "" && lastName == "" {
++		firstName, lastName, _ = strings.Cut(strings.TrimSpace(u.Name), " ")
++	}
++
++	// AuthService is left empty: the caller sets it to the service in use.
++	return &model.User{
++		Username:  model.CleanUsername(rctx.Logger(), username),
++		Email:     email,
++		FirstName: firstName,
++		LastName:  strings.TrimSpace(lastName),
++		AuthData:  new(u.Sub),
++	}
++}
++
++// GetUserFromIdToken does not read the ID token. The user comes from the
++// UserInfo response instead, and the interface doesn't pass the client ID
++// and issuer needed to validate an ID token.
++func (p *OpenIDProvider) GetUserFromIdToken(_ request.CTX, _ string) (*model.User, error) {
++	return nil, nil
++}
++
++// IsSameUser never matches a user only by email address: an account found
++// by email is linked only if it already belongs to this service and subject.
++func (p *OpenIDProvider) IsSameUser(_ request.CTX, dbUser, oauthUser *model.User) bool {
++	return dbUser.AuthService == oauthUser.AuthService &&
++		model.SafeDereference(dbUser.AuthData) != "" &&
++		model.SafeDereference(dbUser.AuthData) == model.SafeDereference(oauthUser.AuthData)
++}
+diff --git a/server/channels/app/oauthproviders/openid/openid_test.go b/server/channels/app/oauthproviders/openid/openid_test.go
+new file mode 100644
+index 000000000000..dbee680212af
+--- /dev/null
++++ b/server/channels/app/oauthproviders/openid/openid_test.go
+@@ -0,0 +1,225 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package oauthopenid
++
++import (
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/mattermost/mattermost/server/public/model"
++	"github.com/mattermost/mattermost/server/public/shared/request"
++)
++
++// newDiscoveryServer serves a discovery document; edit changes it before it
++// is sent. It returns the server and a counter of discovery requests.
++func newDiscoveryServer(t *testing.T, edit func(doc map[string]string)) (*httptest.Server, *atomic.Int32) {
++	t.Helper()
++	var hits atomic.Int32
++	var server *httptest.Server
++	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path != discoverySuffix {
++			http.NotFound(w, r)
++			return
++		}
++		hits.Add(1)
++		doc := map[string]string{
++			"issuer":                 server.URL,
++			"authorization_endpoint": server.URL + "/authorize",
++			"token_endpoint":         server.URL + "/token",
++			"userinfo_endpoint":      server.URL + "/userinfo",
++		}
++		if edit != nil {
++			edit(doc)
++		}
++		require.NoError(t, json.NewEncoder(w).Encode(doc))
++	}))
++	t.Cleanup(server.Close)
++	return server, &hits
++}
++
++func configWithDiscovery(discoveryURL string) *model.Config {
++	cfg := &model.Config{}
++	cfg.SetDefaults()
++	cfg.OpenIdSettings.Enable = new(true)
++	cfg.OpenIdSettings.DiscoveryEndpoint = new(discoveryURL)
++	return cfg
++}
++
++func TestGetSSOSettings(t *testing.T) {
++	rctx := request.TestContext(t)
++
++	t.Run("fills endpoints from discovery without changing the config", func(t *testing.T) {
++		server, hits := newDiscoveryServer(t, nil)
++		cfg := configWithDiscovery(server.URL + discoverySuffix)
++		p := newProvider()
++
++		settings, err := p.GetSSOSettings(rctx, cfg, model.ServiceOpenid)
++		require.NoError(t, err)
++		assert.Equal(t, server.URL+"/authorize", *settings.AuthEndpoint)
++		assert.Equal(t, server.URL+"/token", *settings.TokenEndpoint)
++		assert.Equal(t, server.URL+"/userinfo", *settings.UserAPIEndpoint)
++		assert.Equal(t, "", *cfg.OpenIdSettings.AuthEndpoint)
++		assert.Equal(t, "", *cfg.OpenIdSettings.TokenEndpoint)
++		assert.Equal(t, "", *cfg.OpenIdSettings.UserAPIEndpoint)
++
++		_, err = p.GetSSOSettings(rctx, cfg, model.ServiceOpenid)
++		require.NoError(t, err)
++		assert.Equal(t, int32(1), hits.Load(), "discovery document should be cached")
++	})
++
++	t.Run("accepts an issuer with a trailing slash", func(t *testing.T) {
++		server, _ := newDiscoveryServer(t, func(doc map[string]string) { doc["issuer"] += "/" })
++		_, err := newProvider().GetSSOSettings(rctx, configWithDiscovery(server.URL+discoverySuffix), model.ServiceOpenid)
++		require.NoError(t, err)
++	})
++
++	t.Run("requires a discovery endpoint", func(t *testing.T) {
++		_, err := newProvider().GetSSOSettings(rctx, configWithDiscovery(""), model.ServiceOpenid)
++		require.Error(t, err)
++	})
++
++	t.Run("rejects an unknown service", func(t *testing.T) {
++		_, err := newProvider().GetSSOSettings(rctx, configWithDiscovery(""), "unknown")
++		require.Error(t, err)
++	})
++
++	t.Run("rejects plain http to a non-loopback host", func(t *testing.T) {
++		_, err := newProvider().GetSSOSettings(rctx, configWithDiscovery("http://idp.example.com"+discoverySuffix), model.ServiceOpenid)
++		require.ErrorContains(t, err, "must use https")
++	})
++
++	t.Run("does not cache a failed discovery", func(t *testing.T) {
++		server, hits := newDiscoveryServer(t, func(doc map[string]string) { doc["issuer"] = "https://other.example.com" })
++		p := newProvider()
++		cfg := configWithDiscovery(server.URL + discoverySuffix)
++		_, err := p.GetSSOSettings(rctx, cfg, model.ServiceOpenid)
++		require.Error(t, err)
++		_, err = p.GetSSOSettings(rctx, cfg, model.ServiceOpenid)
++		require.Error(t, err)
++		assert.Equal(t, int32(2), hits.Load())
++	})
++
++	invalid := map[string]struct {
++		edit    func(doc map[string]string)
++		message string
++	}{
++		"issuer mismatch": {
++			edit:    func(doc map[string]string) { doc["issuer"] = "https://other.example.com" },
++			message: "does not match",
++		},
++		"missing issuer": {
++			edit:    func(doc map[string]string) { delete(doc, "issuer") },
++			message: "does not match",
++		},
++		"missing userinfo endpoint": {
++			edit:    func(doc map[string]string) { delete(doc, "userinfo_endpoint") },
++			message: "userinfo_endpoint",
++		},
++		"relative token endpoint": {
++			edit:    func(doc map[string]string) { doc["token_endpoint"] = "/token" },
++			message: "token_endpoint",
++		},
++		"insecure token endpoint": {
++			edit:    func(doc map[string]string) { doc["token_endpoint"] = "http://idp.example.com/token" },
++			message: "must use https",
++		},
++		"authorization endpoint with a query string": {
++			edit:    func(doc map[string]string) { doc["authorization_endpoint"] += "?p=policy" },
++			message: "query string",
++		},
++	}
++	for name, tc := range invalid {
++		t.Run("rejects "+name, func(t *testing.T) {
++			server, _ := newDiscoveryServer(t, tc.edit)
++			_, err := newProvider().GetSSOSettings(rctx, configWithDiscovery(server.URL+discoverySuffix), model.ServiceOpenid)
++			require.ErrorContains(t, err, tc.message)
++		})
++	}
++}
++
++func TestGetUserFromJSON(t *testing.T) {
++	rctx := request.TestContext(t)
++	p := newProvider()
++	settings := &model.SSOSettings{UsePreferredUsername: new(false)}
++
++	t.Run("maps standard claims", func(t *testing.T) {
++		user, err := p.GetUserFromJSON(rctx, strings.NewReader(`{
++			"sub": "248289761001",
++			"email": "Jane.Doe@Example.com",
++			"email_verified": true,
++			"name": "Jane Q. Doe",
++			"given_name": "Jane",
++			"family_name": "Doe",
++			"preferred_username": "jdoe"
++		}`), nil, settings)
++		require.NoError(t, err)
++		assert.Equal(t, "248289761001", *user.AuthData)
++		assert.Equal(t, "jane.doe@example.com", user.Email)
++		assert.Equal(t, "jane.doe", user.Username)
++		assert.Equal(t, "Jane", user.FirstName)
++		assert.Equal(t, "Doe", user.LastName)
++		assert.Equal(t, "", user.AuthService)
++	})
++
++	t.Run("uses preferred_username when enabled", func(t *testing.T) {
++		user, err := p.GetUserFromJSON(rctx, strings.NewReader(`{"sub": "1", "email": "a@example.com", "preferred_username": "Jane.Doe@corp.example.com"}`),
++			nil, &model.SSOSettings{UsePreferredUsername: new(true)})
++		require.NoError(t, err)
++		assert.Equal(t, "jane.doe", user.Username)
++	})
++
++	t.Run("splits name when given and family names are missing", func(t *testing.T) {
++		user, err := p.GetUserFromJSON(rctx, strings.NewReader(`{"sub": "1", "email": "a@example.com", "name": "Jane Q. Doe"}`), nil, settings)
++		require.NoError(t, err)
++		assert.Equal(t, "Jane", user.FirstName)
++		assert.Equal(t, "Q. Doe", user.LastName)
++	})
++
++	t.Run("accepts email_verified as a string", func(t *testing.T) {
++		_, err := p.GetUserFromJSON(rctx, strings.NewReader(`{"sub": "1", "email": "a@example.com", "email_verified": "true"}`), nil, settings)
++		require.NoError(t, err)
++	})
++
++	invalid := map[string]string{
++		"missing sub":                `{"email": "a@example.com"}`,
++		"missing email":              `{"sub": "1"}`,
++		"unverified email":           `{"sub": "1", "email": "a@example.com", "email_verified": false}`,
++		"unverified email as string": `{"sub": "1", "email": "a@example.com", "email_verified": "false"}`,
++		"sub too long":               `{"sub": "` + strings.Repeat("x", model.UserAuthDataMaxLength+1) + `", "email": "a@example.com"}`,
++		"malformed json":             `{`,
++	}
++	for name, body := range invalid {
++		t.Run("rejects "+name, func(t *testing.T) {
++			_, err := p.GetUserFromJSON(rctx, strings.NewReader(body), nil, settings)
++			require.Error(t, err)
++		})
++	}
++}
++
++func TestIsSameUser(t *testing.T) {
++	rctx := request.TestContext(t)
++	p := newProvider()
++	user := func(service, authData string) *model.User {
++		return &model.User{AuthService: service, AuthData: new(authData)}
++	}
++
++	assert.True(t, p.IsSameUser(rctx, user(model.ServiceOpenid, "1"), user(model.ServiceOpenid, "1")))
++	assert.False(t, p.IsSameUser(rctx, user(model.ServiceOpenid, "1"), user(model.ServiceOpenid, "2")))
++	assert.False(t, p.IsSameUser(rctx, user(model.ServiceGitlab, "1"), user(model.ServiceOpenid, "1")))
++	assert.False(t, p.IsSameUser(rctx, user(model.ServiceOpenid, ""), user(model.ServiceOpenid, "")))
++	assert.False(t, p.IsSameUser(rctx, &model.User{AuthService: model.ServiceOpenid}, user(model.ServiceOpenid, "1")))
++}
++
++func TestGetUserFromIdToken(t *testing.T) {
++	user, err := newProvider().GetUserFromIdToken(request.TestContext(t), "header.payload.signature")
++	require.NoError(t, err)
++	assert.Nil(t, user)
++}
+diff --git a/server/cmd/mattermost/main.go b/server/cmd/mattermost/main.go
+index 5fb4b4a005be..38eb1a2f3101 100644
+--- a/server/cmd/mattermost/main.go
++++ b/server/cmd/mattermost/main.go
+@@ -11,6 +11,7 @@ import (
+ 	_ "github.com/mattermost/mattermost/server/v8/channels/app/slashcommands"
+ 	// Plugins
+ 	_ "github.com/mattermost/mattermost/server/v8/channels/app/oauthproviders/gitlab"
++	_ "github.com/mattermost/mattermost/server/v8/channels/app/oauthproviders/openid"
+ 
+ 	// Enterprise Imports
+ 	_ "github.com/mattermost/mattermost/server/v8/enterprise"
+diff --git a/server/config/client.go b/server/config/client.go
+index f06d9e91f1a4..3d660b41c8f7 100644
+--- a/server/config/client.go
++++ b/server/config/client.go
+@@ -368,9 +368,9 @@ func GenerateLimitedClientConfig(c *model.Config, telemetryID string, license *m
+ 	props["SamlLoginButtonText"] = ""
+ 	props["EnableSignUpWithGoogle"] = "false"
+ 	props["EnableSignUpWithOffice365"] = "false"
+-	props["EnableSignUpWithOpenId"] = "false"
+-	props["OpenIdButtonText"] = ""
+-	props["OpenIdButtonColor"] = ""
++	props["EnableSignUpWithOpenId"] = strconv.FormatBool(*c.OpenIdSettings.Enable)
++	props["OpenIdButtonText"] = *c.OpenIdSettings.ButtonText
++	props["OpenIdButtonColor"] = *c.OpenIdSettings.ButtonColor
+ 	props["CWSURL"] = ""
+ 	props["EnableCustomBrand"] = strconv.FormatBool(*c.TeamSettings.EnableCustomBrand)
+ 	props["CustomBrandText"] = *c.TeamSettings.CustomBrandText
+diff --git a/server/config/client_test.go b/server/config/client_test.go
+index fa55d0d672e4..d7bf934fedf1 100644
+--- a/server/config/client_test.go
++++ b/server/config/client_test.go
+@@ -951,6 +951,23 @@ func TestGetLimitedClientConfig(t *testing.T) {
+ 				"PasswordRequireSymbol":    "false",
+ 			},
+ 		},
++		{
++			"OpenID Connect without a license",
++			&model.Config{
++				OpenIdSettings: model.SSOSettings{
++					Enable:      new(true),
++					ButtonText:  new("Sign in with SSO"),
++					ButtonColor: new("#123456"),
++				},
++			},
++			"",
++			nil,
++			map[string]string{
++				"EnableSignUpWithOpenId": "true",
++				"OpenIdButtonText":       "Sign in with SSO",
++				"OpenIdButtonColor":      "#123456",
++			},
++		},
+ 		{
+ 			"Feature Flags",
+ 			&model.Config{
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index ba6e886d6685..ca97d3af75c6 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -5437,7 +5437,6 @@ const AdminDefinition: AdminDefinitionType = {
+                 url: 'authentication/openid',
+                 title: defineMessage({id: 'admin.sidebar.openid', defaultMessage: 'OpenID Connect'}),
+                 isHidden: it.any(
+-                    it.all(it.not(it.licensedForFeature('OpenId')), it.not(it.cloudLicensed)),
+                     it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.AUTHENTICATION.OPENID)),
+                 ),
+                 schema: {
+@@ -5522,6 +5521,7 @@ const AdminDefinition: AdminDefinitionType = {
+                                 {
+                                     value: Constants.GITLAB_SERVICE,
+                                     display_name: defineMessage({id: 'admin.openid.gitlab', defaultMessage: 'GitLab'}),
++                                    isHidden: true,
+                                     help_text: defineMessage({id: 'admin.gitlab.EnableMarkdownDesc', defaultMessage: '1. Log in to your GitLab account and go to Profile Settings -> Applications.\n2. Enter Redirect URIs "<loginUrlChunk>your-mattermost-url</loginUrlChunk>" (example: http://localhost:8065/login/gitlab/complete) and "<signupUrlChunk>your-mattermost-url</signupUrlChunk>".\n3. Then use "Application Secret Key" and "Application ID" fields from GitLab to complete the options below.\n4. Complete the Endpoint URLs below.'}), // eslint-disable-line formatjs/enforce-placeholders -- placeholders provided
+                                     help_text_values: {
+                                         loginUrlChunk: (chunk: string) => `<${chunk}>/login/gitlab/complete`,
+@@ -5532,6 +5532,7 @@ const AdminDefinition: AdminDefinitionType = {
+                                 {
+                                     value: Constants.GOOGLE_SERVICE,
+                                     display_name: defineMessage({id: 'admin.openid.google', defaultMessage: 'Google Apps'}),
++                                    isHidden: true,
+                                     help_text: defineMessage({id: 'admin.google.EnableMarkdownDesc', defaultMessage: '1. <linkLogin>Log in</linkLogin> to your Google account.\n2. Go to <linkConsole>https://console.developers.google.com</linkConsole>, click <strong>Credentials</strong> in the left hand side.\n 3. Under the <strong>Credentials</strong> header, click <strong>Create credentials</strong>, choose <strong>OAuth client ID</strong> and select <strong>Web Application</strong>.\n 4. Enter "Mattermost - your-company-name" as the <strong>Name</strong>.\n 5. Under <strong>Authorized redirect URIs</strong> enter <strong>"your-mattermost-url/signup/google/complete"</strong> (example: http://localhost:8065/signup/google/complete). Click <strong>Create</strong>.\n 6. Paste the <strong>Client ID</strong> and <strong>Client Secret</strong> to the fields below, then click <strong>Save</strong>.\n 7. Go to the <linkAPI>Google People API</linkAPI> and click <strong>Enable</strong>.'}), // eslint-disable-line formatjs/enforce-placeholders -- placeholders provided
+                                     help_text_markdown: false,
+                                     help_text_values: {
+@@ -5565,6 +5566,7 @@ const AdminDefinition: AdminDefinitionType = {
+                                 {
+                                     value: Constants.OFFICE365_SERVICE,
+                                     display_name: defineMessage({id: 'admin.openid.office365', defaultMessage: 'Entra ID'}),
++                                    isHidden: true,
+                                     help_text: defineMessage({id: 'admin.office365.EnableMarkdownDesc', defaultMessage: '1. <linkLogin>Log in</linkLogin> to your Microsoft account. \n2. In Microsoft, go to <strong>Applications</strong> and <strong>App Registrations</strong> in the left pane.\n3. Select <strong>New registration</strong>, then enter "Mattermost - your-company-name" as the <strong>Application Name</strong>. \n4. Under <strong>Redirect URI</strong>, select <strong>Web</strong>, and enter "your-mattermost-url/signup/office365/complete" as the <strong>Redirect URI</strong>. Select <strong>Register</strong>.\n5. Copy the Microsoft <strong>Application (client) ID</strong> value, and paste it below as the <strong>Client ID</strong> value. \n6. Copy the Microsoft <strong>Directory (tenant) ID</strong> value, and paste it below as the <strong>Directory (tenant) ID</strong> value. \n7. In Microsoft, create a new client secret. Copy the resulting client secret value, and paste it below as the <strong>Client Secret</strong> value. Select <strong>Save</strong>.'}), // eslint-disable-line formatjs/enforce-placeholders -- placeholders provided
+                                     help_text_markdown: false,
+                                     help_text_values: {
+@@ -5805,9 +5807,7 @@ const AdminDefinition: AdminDefinitionType = {
+                 url: 'authentication/openid',
+                 isDiscovery: true,
+                 title: defineMessage({id: 'admin.sidebar.openid', defaultMessage: 'OpenID Connect'}),
+-                isHidden: it.any(
+-                    it.any(it.licensedForFeature('OpenId'), it.cloudLicensed),
+-                ),
++                isHidden: () => true,
+                 schema: {
+                     id: 'OpenIdSettings',
+                     name: defineMessage({id: 'admin.authentication.openid', defaultMessage: 'OpenID Connect'}),

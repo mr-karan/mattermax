@@ -50,3 +50,16 @@ self-hosted Mattermax server.
 terms, as upstream already does for PrivacyPolicyLink. Show the sign-up
 agreement checkbox only when a policy link is configured, naming only the
 links that are, and don't require it otherwise.
+
+### openid-connect.patch
+
+2026-11-04. Sign in with any OpenID Connect provider without a license. A new
+provider (`server/channels/app/oauthproviders/openid/`) finds the provider's
+endpoints from `OpenIdSettings.DiscoveryEndpoint` and reads the user from the
+UserInfo endpoint; it is registered in `server/cmd/mattermost/main.go`. The
+client config sends the OpenID login button settings without a license
+(`server/config/client.go`), and the System Console shows the OpenID Connect
+page instead of its upgrade page, offering only "OpenID Connect (Other)"
+(`admin_definition.tsx`). Written from the OpenID Connect specifications and
+Mattermost's open-source OAuth code, without consulting Mattermost's
+enterprise code.
