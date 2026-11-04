@@ -6,3 +6,4 @@ about-dialog.patch
 optional-policy-links.patch
 openid-connect.patch
 remove-upsell-pages.patch
+fix-mfa-switch-title.patch

@@ -74,3 +74,10 @@ for unlicensed paid features inside other pages, such as Burn-on-Read
 messages, show nothing instead of an upgrade prompt
 (`licensed_section_container.tsx`). Mattermax has no license to show, and
 these features are not in its build.
+
+### fix-mfa-switch-title.patch
+
+2026-11-04. Fix the title of the MFA step when switching an email/password
+account to SSO, which showed a literal "{uiType}" instead of the sign-in
+method (`email_to_oauth.tsx`). Upstream formatted the message without its
+value.

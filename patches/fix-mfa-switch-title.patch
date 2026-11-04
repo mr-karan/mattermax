@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 18:31:34 +0530
+Subject: [PATCH] fix: show the sign-in method in the MFA step of switching to
+ SSO
+
+Mattermax-Patch: fix-mfa-switch-title.patch
+---
+ .../src/components/claim/components/email_to_oauth.tsx         | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/webapp/channels/src/components/claim/components/email_to_oauth.tsx b/webapp/channels/src/components/claim/components/email_to_oauth.tsx
+index 6b60855b5cd2..1ade80b9a1bb 100644
+--- a/webapp/channels/src/components/claim/components/email_to_oauth.tsx
++++ b/webapp/channels/src/components/claim/components/email_to_oauth.tsx
+@@ -78,8 +78,7 @@ const EmailToOAuth = (props: Props) => {
+             <LoginMfa
+                 loginId={props.email}
+                 password={password}
+-                // eslint-disable-next-line formatjs/enforce-placeholders -- uiType provided when message is formatted at component level
+-                title={formatMessage({id: 'claim.email_to_oauth.title', defaultMessage: 'Switch Email/Password Account to {uiType}'})}
++                title={formatMessage({id: 'claim.email_to_oauth.title', defaultMessage: 'Switch Email/Password Account to {uiType}'}, {uiType})}
+                 onSubmit={submit}
+             />
+         );
