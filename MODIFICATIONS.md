@@ -98,3 +98,17 @@ mmctl drops its `compliance-export` command, its tests and its docs: the
 command used enterprise job settings, and Team Edition has no compliance
 export jobs. The enterprise metrics test (`server/channels/app/metrics_test.go`)
 is removed.
+
+### id-loaded-push-notifications.patch
+
+2026-11-04. Allow "Full message content fetched from the server on receipt"
+(`EmailSettings.PushNotificationContents` = `id_loaded`) without a license.
+Push notifications then carry only IDs, and the mobile app fetches the message
+from the server through `/api/v4/notifications/ack`, so the push proxy, Apple
+and Google never see message contents. A new implementation of upstream's
+`NotificationInterface` (`server/channels/app/notification_id_loaded.go`)
+registers itself through `RegisterNotificationInterface` and builds the
+fetched message with the same code as the "full" setting. The System Console
+offers the option without a license (`admin_definition.tsx`). Written from
+Mattermost's open-source notification code, without consulting Mattermost's
+enterprise code.

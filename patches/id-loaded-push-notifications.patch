@@ -1,0 +1,205 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 22:57:59 +0530
+Subject: [PATCH] feat: id-only push notifications
+
+Mattermax-Patch: id-loaded-push-notifications.patch
+---
+ server/channels/app/notification_id_loaded.go | 68 ++++++++++++++++++
+ .../app/notification_id_loaded_test.go        | 69 +++++++++++++++++++
+ .../admin_console/admin_definition.tsx        | 24 -------
+ 3 files changed, 137 insertions(+), 24 deletions(-)
+ create mode 100644 server/channels/app/notification_id_loaded.go
+ create mode 100644 server/channels/app/notification_id_loaded_test.go
+
+diff --git a/server/channels/app/notification_id_loaded.go b/server/channels/app/notification_id_loaded.go
+new file mode 100644
+index 000000000000..ed2cd66c44c4
+--- /dev/null
++++ b/server/channels/app/notification_id_loaded.go
+@@ -0,0 +1,68 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package app
++
++import (
++	"net/http"
++
++	"github.com/mattermost/mattermost/server/public/model"
++	"github.com/mattermost/mattermost/server/public/shared/request"
++	"github.com/mattermost/mattermost/server/v8/einterfaces"
++)
++
++// idLoadedNotifications serves message contents for "id_loaded" push notifications.
++type idLoadedNotifications struct {
++	app *App
++}
++
++func init() {
++	RegisterNotificationInterface(func(a *App) einterfaces.NotificationInterface {
++		return &idLoadedNotifications{app: a}
++	})
++}
++
++func (n *idLoadedNotifications) CheckLicense() *model.AppError {
++	return nil
++}
++
++func (n *idLoadedNotifications) GetNotificationMessage(rctx request.CTX, ack *model.PushNotificationAck, userID string) (*model.PushNotification, *model.AppError) {
++	a := n.app
++
++	post, appErr := a.GetSinglePost(rctx, ack.PostId, false)
++	if appErr != nil {
++		return nil, appErr
++	}
++	channel, appErr := a.GetChannel(rctx, post.ChannelId)
++	if appErr != nil {
++		return nil, appErr
++	}
++	user, appErr := a.GetUser(rctx, userID)
++	if appErr != nil {
++		return nil, appErr
++	}
++	sender, appErr := a.GetUser(rctx, post.UserId)
++	if appErr != nil {
++		return nil, appErr
++	}
++
++	notification := &PostNotification{Channel: channel, Post: post, Sender: sender}
++	if channel.Type == model.ChannelTypeGroup {
++		profiles, err := a.Srv().Store().User().GetAllProfilesInChannel(rctx, channel.Id, true)
++		if err != nil {
++			return nil, model.NewAppError("GetNotificationMessage", "app.user.get_profiles.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++		}
++		notification.ProfileMap = profiles
++	}
++
++	nameFormat := a.GetNotificationNameFormat(user)
++	channelName := notification.GetChannelName(nameFormat, user.Id)
++	senderName := notification.GetSenderName(nameFormat, *a.Config().ServiceSettings.EnablePostUsernameOverride)
++
++	replyToThreadType := ""
++	if post.RootId != "" && a.IsCRTEnabledForUser(rctx, user.Id) {
++		replyToThreadType = model.CommentsNotifyCRT
++	}
++
++	return a.BuildPushNotificationMessage(rctx, model.FullNotification, post, user, channel, channelName, senderName, false, false, replyToThreadType)
++}
+diff --git a/server/channels/app/notification_id_loaded_test.go b/server/channels/app/notification_id_loaded_test.go
+new file mode 100644
+index 000000000000..ceb3101cd36e
+--- /dev/null
++++ b/server/channels/app/notification_id_loaded_test.go
+@@ -0,0 +1,69 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package app
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/mattermost/mattermost/server/public/model"
++)
++
++func TestIdLoadedNotifications(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t).InitBasic(t)
++
++	notifications := th.App.Notification()
++	require.NotNil(t, notifications)
++	require.Nil(t, notifications.CheckLicense())
++
++	t.Run("the pushed message carries no content", func(t *testing.T) {
++		post := th.CreateMessagePost(t, th.BasicChannel, "secret text")
++
++		msg, appErr := th.App.BuildPushNotificationMessage(th.Context, model.IdLoadedNotification, post, th.BasicUser2, th.BasicChannel, th.BasicChannel.DisplayName, th.BasicUser.Username, false, false, "")
++		require.Nil(t, appErr)
++		assert.True(t, msg.IsIdLoaded)
++		assert.Equal(t, post.Id, msg.PostId)
++		assert.NotContains(t, msg.Message, "secret text")
++		assert.Empty(t, msg.ChannelName)
++		assert.Empty(t, msg.SenderName)
++	})
++
++	t.Run("the fetched message has the content of a channel post", func(t *testing.T) {
++		post := th.CreateMessagePost(t, th.BasicChannel, "hello channel")
++		ack := &model.PushNotificationAck{Id: model.NewId(), PostId: post.Id, NotificationType: model.PushTypeMessage, IsIdLoaded: true}
++
++		msg, appErr := notifications.GetNotificationMessage(th.Context, ack, th.BasicUser2.Id)
++		require.Nil(t, appErr)
++		assert.False(t, msg.IsIdLoaded)
++		assert.Equal(t, post.Id, msg.PostId)
++		assert.Equal(t, th.BasicChannel.Id, msg.ChannelId)
++		assert.Equal(t, th.BasicUser.Id, msg.SenderId)
++		assert.Equal(t, th.BasicChannel.DisplayName, msg.ChannelName)
++		assert.Contains(t, msg.Message, "hello channel")
++		assert.Contains(t, msg.Message, msg.SenderName+": ")
++	})
++
++	t.Run("the fetched message of a direct message has no sender prefix", func(t *testing.T) {
++		dm := th.CreateDmChannel(t, th.BasicUser2)
++		post := th.CreateMessagePost(t, dm, "hello you")
++		ack := &model.PushNotificationAck{Id: model.NewId(), PostId: post.Id, NotificationType: model.PushTypeMessage, IsIdLoaded: true}
++
++		msg, appErr := notifications.GetNotificationMessage(th.Context, ack, th.BasicUser2.Id)
++		require.Nil(t, appErr)
++		assert.Equal(t, "hello you", msg.Message)
++	})
++
++	t.Run("a deleted post is not fetched", func(t *testing.T) {
++		post := th.CreateMessagePost(t, th.BasicChannel, "gone")
++		_, appErr := th.App.DeletePost(th.Context, post.Id, th.BasicUser.Id)
++		require.Nil(t, appErr)
++		ack := &model.PushNotificationAck{Id: model.NewId(), PostId: post.Id, NotificationType: model.PushTypeMessage, IsIdLoaded: true}
++
++		_, appErr = notifications.GetNotificationMessage(th.Context, ack, th.BasicUser2.Id)
++		require.NotNil(t, appErr)
++	})
++}
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index ca97d3af75c6..ab59c1995221 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -3327,29 +3327,6 @@ const AdminDefinition: AdminDefinitionType = {
+                                 it.stateIsFalse('EmailSettings.SendEmailNotifications'),
+                             ),
+                         },
+-                        {
+-                            type: 'dropdown',
+-                            key: 'EmailSettings.PushNotificationContents',
+-                            label: defineMessage({id: 'admin.environment.notifications.pushContents.label', defaultMessage: 'Push Notification Contents:'}),
+-                            help_text: defineMessage({id: 'admin.environment.notifications.pushContents.help', defaultMessage: '**Generic description with only sender name** - Includes only the name of the person who sent the message in push notifications, with no information about channel name or message contents.\n **Generic description with sender and channel names** - Includes the name of the person who sent the message and the channel it was sent in, but not the message contents.\n **Full message content sent in the notification payload** - Includes the message contents in the push notification payload that is relayed through Apple\'s Push Notification Service (APNS) or Google\'s Firebase Cloud Messaging (FCM). It is **highly recommended** this option only be used with an "https" protocol to encrypt the connection and protect confidential information sent in messages.'}), // eslint-disable-line formatjs/no-multiple-whitespaces
+-                            help_text_markdown: true,
+-                            options: [
+-                                {
+-                                    value: 'generic_no_channel',
+-                                    display_name: defineMessage({id: 'admin.environment.notifications.pushContents.genericNoChannel', defaultMessage: 'Generic description with only sender name'}),
+-                                },
+-                                {
+-                                    value: 'generic',
+-                                    display_name: defineMessage({id: 'admin.environment.notifications.pushContents.generic', defaultMessage: 'Generic description with sender and channel names'}),
+-                                },
+-                                {
+-                                    value: 'full',
+-                                    display_name: defineMessage({id: 'admin.environment.notifications.pushContents.full', defaultMessage: 'Full message content sent in the notification payload'}),
+-                                },
+-                            ],
+-                            isHidden: it.licensedForFeature('IDLoadedPushNotifications'),
+-                            isDisabled: it.not(it.userHasWritePermissionOnResource(RESOURCE_KEYS.SITE.NOTIFICATIONS)),
+-                        },
+                         {
+                             type: 'dropdown',
+                             key: 'EmailSettings.PushNotificationContents',
+@@ -3374,7 +3351,6 @@ const AdminDefinition: AdminDefinitionType = {
+                                     display_name: defineMessage({id: 'admin.environment.notifications.pushContents.idLoaded', defaultMessage: 'Full message content fetched from the server on receipt'}),
+                                 },
+                             ],
+-                            isHidden: it.not(it.licensedForFeature('IDLoadedPushNotifications')),
+                             isDisabled: it.not(it.userHasWritePermissionOnResource(RESOURCE_KEYS.SITE.NOTIFICATIONS)),
+                         },
+                         {
