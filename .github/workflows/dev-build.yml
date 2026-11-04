@@ -5,17 +5,21 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/opnlabs/mattermax
 
 jobs:
-  dev-build:
+  build:
     runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+      release: ${{ steps.vars.outputs.release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set build metadata
         id: vars
@@ -50,6 +54,33 @@ jobs:
           MATTERMAX_RELEASE: ${{ steps.vars.outputs.release }}
         run: scripts/build-release.sh
 
+      - name: Upload server package
+        uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: work/build/dist/mattermax-${{ steps.vars.outputs.release }}-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: docker
+
+      - name: Download server package
+        uses: actions/download-artifact@v4
+        with:
+          name: server
+          path: dist
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -63,12 +94,12 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: work/build/dist
+          context: dist
           file: docker/Dockerfile
           platforms: linux/amd64
-          build-args: PACKAGE=mattermax-${{ steps.vars.outputs.release }}-linux-amd64.tar.gz
+          build-args: PACKAGE=mattermax-${{ needs.build.outputs.release }}-linux-amd64.tar.gz
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           push: true
           tags: |
             ${{ env.IMAGE }}:dev
-            ${{ env.IMAGE }}:dev-${{ steps.vars.outputs.short_sha }}
+            ${{ env.IMAGE }}:dev-${{ needs.build.outputs.short_sha }}

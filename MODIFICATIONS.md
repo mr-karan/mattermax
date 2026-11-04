@@ -56,7 +56,14 @@ links that are, and don't require it otherwise.
 2026-11-04. Sign in with any OpenID Connect provider without a license. A new
 provider (`server/channels/app/oauthproviders/openid/`) finds the provider's
 endpoints from `OpenIdSettings.DiscoveryEndpoint` and reads the user from the
-UserInfo endpoint; it is registered in `server/cmd/mattermost/main.go`. The
+UserInfo endpoint; it is registered in `server/cmd/mattermost/main.go`.
+Discovery uses the server's outgoing HTTP client, so internal addresses must
+be in `AllowedUntrustedInternalConnections`, and doesn't follow redirects.
+Every login requires an ID token from the token endpoint whose issuer,
+audience, authorized party and expiry are valid, and whose subject matches the
+UserInfo response. The provider must mark the email address verified
+(`email_verified` true). Accounts are identified by a hash of issuer and
+subject, so a different provider never signs in to an existing account. The
 client config sends the OpenID login button settings without a license
 (`server/config/client.go`), and the System Console shows the OpenID Connect
 page instead of its upgrade page, offering only "OpenID Connect (Other)"
@@ -81,3 +88,13 @@ these features are not in its build.
 account to SSO, which showed a literal "{uiType}" instead of the sign-in
 method (`email_to_oauth.tsx`). Upstream formatted the message without its
 value.
+
+### no-enterprise-imports.patch
+
+2026-11-04. Remove every import of `server/enterprise/` that isn't behind the
+`enterprise` build tag, so Mattermax builds without that tree. The server no
+longer imports the enterprise package (`server/cmd/mattermost/main.go`).
+mmctl drops its `compliance-export` command, its tests and its docs: the
+command used enterprise job settings, and Team Edition has no compliance
+export jobs. The enterprise metrics test (`server/channels/app/metrics_test.go`)
+is removed.

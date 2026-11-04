@@ -16,13 +16,28 @@ name="mattermax-$RELEASE"
 
 # copy_files GIT_DIR DEST: copy tracked and untracked (not ignored) files, so
 # uncommitted work in the workspace is included but its build output isn't.
+# server/enterprise/ is never copied: it isn't built, branded or shipped in the
+# source tarball, and any import of it fails to compile.
 copy_files() {
   mkdir -p "$2"
   local deleted
   deleted="$(git -C "$1" ls-files -d)"
   git -C "$1" ls-files -co --exclude-standard |
     { if [[ -n "$deleted" ]]; then grep -vxF -e "$deleted"; else cat; fi; } |
+    { grep -v '^server/enterprise/' || (( $? == 1 )); } |
     tar -C "$1" -cf - --no-recursion -T - | tar -C "$2" -xf -
+}
+
+# absent PATTERN FILE: succeed if the extended regex PATTERN doesn't match FILE.
+# A grep error is fatal, never read as "no match".
+absent() {
+  local rc=0
+  grep -qE -- "$1" "$2" || rc=$?
+  case "$rc" in
+    0) return 1 ;;
+    1) return 0 ;;
+    *) die "grep failed on $2" ;;
+  esac
 }
 
 # The build hash (About dialog, logs, the web app's "new version" prompt) is
@@ -34,6 +49,7 @@ log "Copying work/src to work/build/src"
 rm -rf -- "$BUILD"
 mkdir -p "$dist"
 copy_files "$SRC" "$out"
+[[ ! -e "$out/server/enterprise" ]] || die "server/enterprise/ was copied into the build tree"
 
 log "Branding"
 python3 -I "$ROOT/branding/rebrand.py" apply "$out" --report "$ROOT/branding/report.md"
@@ -62,14 +78,18 @@ log "Building server and web app ($RELEASE, $hash)"
   BUILD_ENTERPRISE_DIR=/nonexistent \
   PLUGIN_PACKAGES=)
 
-log "Checking the binary has no enterprise code"
-bin="$out/server/bin/mattermost"
-if go version -m "$bin" | grep -E -- '-tags=.*\b(enterprise|sourceavailable)\b'; then
-  die "binary was built with an enterprise or sourceavailable tag"
-fi
-if go tool nm "$bin" | grep -q 'server/v8/enterprise'; then
-  die "binary contains server/v8/enterprise symbols"
-fi
+log "Checking the binaries have no enterprise code"
+# Every packaged executable is checked. The tool output goes to files and is
+# searched only after the tool succeeded: piping it into grep -q can hide a
+# match (SIGPIPE under pipefail) or a tool failure.
+for bin in "$out/server/bin/mattermost" "$out/server/bin/mmctl"; do
+  go version -m "$bin" > "$BUILD/buildinfo.txt" || die "can't read the build info of $bin"
+  go tool nm "$bin" > "$BUILD/symbols.txt" || die "can't list the symbols of $bin"
+  absent '-tags=.*\b(enterprise|sourceavailable)\b' "$BUILD/buildinfo.txt" ||
+    die "$bin was built with an enterprise or sourceavailable tag"
+  absent 'server/v8/enterprise' "$BUILD/symbols.txt" ||
+    die "$bin contains server/v8/enterprise symbols"
+done
 
 log "Checking en.json matches the branded source strings"
 (cd "$out/webapp/channels" && npm run --silent i18n-extract:check)

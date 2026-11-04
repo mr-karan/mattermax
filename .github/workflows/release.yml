@@ -6,18 +6,19 @@ on:
       - '[0-9]*.[0-9]*.[0-9]*-[0-9]*'
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   IMAGE: ghcr.io/opnlabs/mattermax
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Check the tag matches upstream.json and revision
         run: |
@@ -47,11 +48,46 @@ jobs:
       - name: Build
         run: scripts/build-release.sh
 
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            work/build/dist/mattermax-${{ github.ref_name }}-linux-amd64.tar.gz
+            work/build/dist/mattermax-${{ github.ref_name }}-source.tar.gz
+            work/build/dist/mattermax-${{ github.ref_name }}-source.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: docker
+
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Check the source tarball checksum
+        working-directory: dist
+        run: sha256sum -c "mattermax-$GITHUB_REF_NAME-source.tar.gz.sha256"
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: dist
         run: |
-          cd work/build/dist
           gh release create "$GITHUB_REF_NAME" --title "Mattermax $GITHUB_REF_NAME" --generate-notes \
             "mattermax-$GITHUB_REF_NAME-linux-amd64.tar.gz" \
             "mattermax-$GITHUB_REF_NAME-source.tar.gz" \
@@ -70,7 +106,7 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: work/build/dist
+          context: dist
           file: docker/Dockerfile
           platforms: linux/amd64
           build-args: PACKAGE=mattermax-${{ github.ref_name }}-linux-amd64.tar.gz
