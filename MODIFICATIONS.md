@@ -63,3 +63,14 @@ page instead of its upgrade page, offering only "OpenID Connect (Other)"
 (`admin_definition.tsx`). Written from the OpenID Connect specifications and
 Mattermost's open-source OAuth code, without consulting Mattermost's
 enterprise code.
+
+### remove-upsell-pages.patch
+
+2026-11-04. Remove the System Console pages that only advertise paid
+Mattermost features: every feature discovery page and the About > Edition and
+License page (`remove_upsell_pages.ts`, applied in
+`selectors/admin_console.tsx` before plugins change the console). Sections
+for unlicensed paid features inside other pages, such as Burn-on-Read
+messages, show nothing instead of an upgrade prompt
+(`licensed_section_container.tsx`). Mattermax has no license to show, and
+these features are not in its build.

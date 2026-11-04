@@ -230,6 +230,7 @@ webapp/channels/src/components/admin_console/password_settings.tsx
 webapp/channels/src/components/admin_console/plugin_management/__snapshots__/plugin_management.test.tsx.snap
 webapp/channels/src/components/admin_console/plugin_management/plugin_management.tsx
 webapp/channels/src/components/admin_console/push_settings.tsx
+webapp/channels/src/components/admin_console/remove_upsell_pages.ts
 webapp/channels/src/components/admin_console/schema_admin_settings.tsx
 webapp/channels/src/components/admin_console/session_length_settings.tsx
 webapp/channels/src/components/admin_console/system_properties/user_properties_dot_menu.tsx

@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 16:54:56 +0530
+Subject: [PATCH] feat: remove upsell pages
+
+Mattermax-Patch: remove-upsell-pages.patch
+---
+ .../licensed_section_container.tsx            | 14 ++-----------
+ .../admin_console/remove_upsell_pages.ts      | 21 +++++++++++++++++++
+ .../src/selectors/admin_console.test.tsx      | 19 +++++++++++++++--
+ .../channels/src/selectors/admin_console.tsx  |  3 ++-
+ 4 files changed, 42 insertions(+), 15 deletions(-)
+ create mode 100644 webapp/channels/src/components/admin_console/remove_upsell_pages.ts
+
+diff --git a/webapp/channels/src/components/admin_console/licensed_section_container/licensed_section_container.tsx b/webapp/channels/src/components/admin_console/licensed_section_container/licensed_section_container.tsx
+index e379a543bde3..544c3fc00f92 100644
+--- a/webapp/channels/src/components/admin_console/licensed_section_container/licensed_section_container.tsx
++++ b/webapp/channels/src/components/admin_console/licensed_section_container/licensed_section_container.tsx
+@@ -9,7 +9,6 @@ import type {ClientLicense} from '@mattermost/types/config';
+ 
+ import {getLicense} from 'mattermost-redux/selectors/entities/general';
+ 
+-import InlineSectionFeatureDiscovery from 'components/admin_console/inline_section_feature_discovery';
+ import AdminSectionPanel from 'components/widgets/admin_console/admin_section_panel';
+ 
+ import {LicenseSkus} from 'utils/constants';
+@@ -42,7 +41,6 @@ const LicensedSectionContainer: React.FC<Props> = ({
+     requiredSku,
+     sectionTitle,
+     sectionDescription,
+-    featureDiscoveryConfig,
+     license,
+ }) => {
+     // Determine if user has sufficient licensing to access the feature
+@@ -63,16 +61,8 @@ const LicensedSectionContainer: React.FC<Props> = ({
+         );
+     }
+ 
+-    // Render feature discovery for users without sufficient licensing
+-    return (
+-        <InlineSectionFeatureDiscovery
+-            featureName={featureDiscoveryConfig.featureName}
+-            title={featureDiscoveryConfig.title}
+-            description={featureDiscoveryConfig.description}
+-            learnMoreURL={featureDiscoveryConfig.learnMoreURL}
+-            svgImage={featureDiscoveryConfig.svgImage}
+-        />
+-    );
++    // Show nothing for a paid feature that isn't licensed.
++    return null;
+ };
+ 
+ function mapStateToProps(state: GlobalState): StateProps {
+diff --git a/webapp/channels/src/components/admin_console/remove_upsell_pages.ts b/webapp/channels/src/components/admin_console/remove_upsell_pages.ts
+new file mode 100644
+index 000000000000..a02d973480f0
+--- /dev/null
++++ b/webapp/channels/src/components/admin_console/remove_upsell_pages.ts
+@@ -0,0 +1,21 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++import type {AdminDefinition} from './types';
++
++// removeUpsellPages removes the System Console pages that only advertise paid
++// Mattermost features: every feature discovery page, and the About section,
++// whose only page is Edition and License. It changes the definition in place.
++export function removeUpsellPages(definition: AdminDefinition): AdminDefinition {
++    delete definition.about;
++
++    for (const section of Object.values(definition)) {
++        for (const [key, subsection] of Object.entries(section.subsections)) {
++            if (subsection.isDiscovery) {
++                delete section.subsections[key];
++            }
++        }
++    }
++
++    return definition;
++}
+diff --git a/webapp/channels/src/selectors/admin_console.test.tsx b/webapp/channels/src/selectors/admin_console.test.tsx
+index a368fbd4a532..e2f619712599 100644
+--- a/webapp/channels/src/selectors/admin_console.test.tsx
++++ b/webapp/channels/src/selectors/admin_console.test.tsx
+@@ -1,7 +1,10 @@
+ // Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
+ // See LICENSE.txt for license information.
+ 
++import cloneDeep from 'lodash/cloneDeep';
++
+ import AdminDefinition from 'components/admin_console/admin_definition';
++import {removeUpsellPages} from 'components/admin_console/remove_upsell_pages';
+ 
+ import type {GlobalState} from 'types/store';
+ 
+@@ -14,9 +17,21 @@ type TestReducerState = {
+ 
+ describe('Selectors.AdminConsole', () => {
+     describe('get admin definitions', () => {
+-        it('should return the default admin definition if there is not plugins', () => {
++        it('should return the default admin definition without upsell pages if there is not plugins', () => {
+             const state = {plugins: {adminConsoleReducers: {}}} as GlobalState;
+-            expect(getAdminDefinition(state)).toEqual(AdminDefinition);
++            const result = getAdminDefinition(state);
++            expect(result).toEqual(removeUpsellPages(cloneDeep(AdminDefinition)));
++
++            expect(result.about).toBeUndefined();
++            for (const section of Object.values(result)) {
++                for (const subsection of Object.values(section.subsections)) {
++                    expect(subsection.isDiscovery).toBeFalsy();
++                }
++            }
++            expect(result.authentication.subsections.openid).toBeDefined();
++
++            expect(AdminDefinition.about).toBeDefined();
++            expect(AdminDefinition.authentication.subsections.openid_feature_discovery).toBeDefined();
+         });
+ 
+         it('should allow to remove everything with a plugin', () => {
+diff --git a/webapp/channels/src/selectors/admin_console.tsx b/webapp/channels/src/selectors/admin_console.tsx
+index 17943502b4ca..421c9c1a8dfb 100644
+--- a/webapp/channels/src/selectors/admin_console.tsx
++++ b/webapp/channels/src/selectors/admin_console.tsx
+@@ -10,6 +10,7 @@ import {getLicense} from 'mattermost-redux/selectors/entities/general';
+ import {getMySystemPermissions, haveISystemPermission} from 'mattermost-redux/selectors/entities/roles_helpers';
+ 
+ import AdminDefinition from 'components/admin_console/admin_definition';
++import {removeUpsellPages} from 'components/admin_console/remove_upsell_pages';
+ 
+ import type {GlobalState} from 'types/store';
+ 
+@@ -20,7 +21,7 @@ export const getAdminDefinition = createSelector(
+     () => AdminDefinition,
+     (state: GlobalState) => state.plugins.adminConsoleReducers,
+     (adminDefinition, reducers) => {
+-        let result = cloneDeep(AdminDefinition);
++        let result = removeUpsellPages(cloneDeep(AdminDefinition));
+         for (const reducer of Object.values(reducers)) {
+             result = reducer(result);
+         }

@@ -5,3 +5,4 @@ remove-user-limits.patch
 about-dialog.patch
 optional-policy-links.patch
 openid-connect.patch
+remove-upsell-pages.patch
