@@ -1,0 +1,8 @@
+/work/
+
+.env
+.env.*
+.mvm
+
+__pycache__/
+*.pyc

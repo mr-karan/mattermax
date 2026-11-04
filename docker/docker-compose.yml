@@ -1,0 +1,53 @@
+# Run the published Mattermax image with PostgreSQL.
+#
+#   cd docker
+#   echo 'POSTGRES_PASSWORD=<a long random password>' > .env
+#   docker compose up -d
+#
+# Pin a release with MATTERMAX_VERSION=12.0.1-1 in .env. Mattermax listens on
+# 127.0.0.1:8065 only; put a TLS reverse proxy in front of it and set
+# MM_SITEURL to its public URL.
+name: mattermax
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mattermax
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env}
+      POSTGRES_DB: mattermax
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mattermax", "-d", "mattermax"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mattermax:
+    image: ghcr.io/opnlabs/mattermax:${MATTERMAX_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mattermax:${POSTGRES_PASSWORD}@db:5432/mattermax?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: ${MM_SITEURL:-http://localhost:8065}
+    ports:
+      - "127.0.0.1:8065:8065"
+    volumes:
+      - config:/mattermax/config
+      - data:/mattermax/data
+      - logs:/mattermax/logs
+      - plugins:/mattermax/plugins
+      - client-plugins:/mattermax/client/plugins
+
+volumes:
+  db:
+  config:
+  data:
+  logs:
+  plugins:
+  client-plugins:

@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9]*.[0-9]*.[0-9]*-[0-9]*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/opnlabs/mattermax
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check the tag matches upstream.json and revision
+        run: |
+          source scripts/lib.sh
+          [[ "$GITHUB_REF_NAME" == "$RELEASE" ]] || die "tag $GITHUB_REF_NAME does not match $RELEASE"
+
+      - name: Check patches
+        run: scripts/check-patches.sh
+
+      - name: Create workspace
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          scripts/create-workspace.sh
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: work/src/server/go.mod
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: work/src/.nvmrc
+
+      - name: Build
+        run: scripts/build-release.sh
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd work/build/dist
+          gh release create "$GITHUB_REF_NAME" --title "Mattermax $GITHUB_REF_NAME" --generate-notes \
+            "mattermax-$GITHUB_REF_NAME-linux-amd64.tar.gz" \
+            "mattermax-$GITHUB_REF_NAME-source.tar.gz" \
+            "mattermax-$GITHUB_REF_NAME-source.tar.gz.sha256"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: work/build/dist
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          build-args: PACKAGE=mattermax-${{ github.ref_name }}-linux-amd64.tar.gz
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+            ${{ env.IMAGE }}:latest

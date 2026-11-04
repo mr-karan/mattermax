@@ -1,0 +1,240 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 11:52:37 +0530
+Subject: [PATCH] chore: attribution, AGPL notice and source code link
+
+Show the product name without "Team Edition", replace the community link
+with an attribution to Mattermost, add the AGPL notice with a link to the
+running version's source code (AGPL section 13), and drop the links to
+Mattermost's terms of use and privacy policy, which don't cover a
+self-hosted Mattermax server.
+
+Mattermax-Patch: about-dialog.patch
+---
+ .../about_build_modal.test.tsx                | 19 +++---
+ .../about_build_modal/about_build_modal.tsx   | 68 +++++++------------
+ webapp/channels/src/i18n/en.json              | 22 ++----
+ 3 files changed, 38 insertions(+), 71 deletions(-)
+
+diff --git a/webapp/channels/src/components/about_build_modal/about_build_modal.test.tsx b/webapp/channels/src/components/about_build_modal/about_build_modal.test.tsx
+index 37e3c44ac091..a2889908de36 100644
+--- a/webapp/channels/src/components/about_build_modal/about_build_modal.test.tsx
++++ b/webapp/channels/src/components/about_build_modal/about_build_modal.test.tsx
+@@ -99,9 +99,10 @@ describe('components/AboutBuildModal', () => {
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Server Version: 3.6.0');
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Database Schema Version: 77');
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Build Number: 123456');
+-        expect(screen.getByText('Mattermost Team Edition')).toBeInTheDocument();
++        expect(screen.getByText('Mattermost')).toBeInTheDocument();
+         expect(screen.getByText('All your team communication in one place, instantly searchable and accessible anywhere.')).toBeInTheDocument();
+-        expect(screen.getByRole('link', {name: 'mattermost.com/community/'})).toHaveAttribute('href', 'https://mattermost.com/community/?utm_source=mattermost&utm_medium=in-product&utm_content=about_build_modal&uid=&sid=&edition=team&server_version=3.6.0');
++        expect(screen.getByText('Based on Mattermost open source software. Not affiliated with or endorsed by Mattermost, Inc.')).toBeInTheDocument();
++        expect(screen.getByRole('link', {name: 'Source code'})).toHaveAttribute('href', 'https://github.com/opnlabs/mattermax/releases/tag/123456');
+         expect(screen.queryByText('EE Build Hash: 0123456789abcdef')).not.toBeInTheDocument();
+         expect(screen.queryByText('Hostname: disconnected', {exact: false})).toBeInTheDocument();
+ 
+@@ -149,9 +150,9 @@ describe('components/AboutBuildModal', () => {
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Server Version: dev');
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Database Schema Version: 77');
+         expect(screen.getByTestId('aboutModalVersionInfo')).toHaveTextContent('Build Number: n/a');
+-        expect(screen.getByText('Mattermost Team Edition')).toBeInTheDocument();
++        expect(screen.getByText('Mattermost')).toBeInTheDocument();
+         expect(screen.getByText('All your team communication in one place, instantly searchable and accessible anywhere.')).toBeInTheDocument();
+-        expect(screen.getByRole('link', {name: 'mattermost.com/community/'})).toHaveAttribute('href', 'https://mattermost.com/community/?utm_source=mattermost&utm_medium=in-product&utm_content=about_build_modal&uid=&sid=&edition=team&server_version=dev');
++        expect(screen.getByText('Based on Mattermost open source software. Not affiliated with or endorsed by Mattermost, Inc.')).toBeInTheDocument();
+         expect(screen.queryByText('EE Build Hash: 0123456789abcdef')).not.toBeInTheDocument();
+         expect(screen.queryByText('Hostname: server did not provide hostname', {exact: false})).toBeInTheDocument();
+ 
+@@ -190,7 +191,7 @@ describe('components/AboutBuildModal', () => {
+         expect(onExited).toHaveBeenCalledTimes(1);
+     });
+ 
+-    test('should show default tos and privacy policy links and not the config links', () => {
++    test('should not link to the Mattermost terms of use or privacy policy', () => {
+         const state = {
+             entities: {
+                 general: {
+@@ -214,12 +215,8 @@ describe('components/AboutBuildModal', () => {
+             state,
+         );
+ 
+-        expect(screen.getByRole('link', {name: 'Terms of Use'})).toHaveAttribute('href', `${AboutLinks.TERMS_OF_SERVICE}?utm_source=mattermost&utm_medium=in-product&utm_content=about_build_modal&uid=currentUserId&sid=&edition=enterprise&server_version=3.6.0`);
+-
+-        expect(screen.getByRole('link', {name: 'Privacy Policy'})).toHaveAttribute('href', `${AboutLinks.PRIVACY_POLICY}?utm_source=mattermost&utm_medium=in-product&utm_content=about_build_modal&uid=currentUserId&sid=&edition=enterprise&server_version=3.6.0`);
+-
+-        expect(screen.getByRole('link', {name: 'Terms of Use'})).not.toHaveAttribute('href', config?.TermsOfServiceLink);
+-        expect(screen.getByRole('link', {name: 'Privacy Policy'})).not.toHaveAttribute('href', config?.PrivacyPolicyLink);
++        expect(screen.queryByRole('link', {name: 'Terms of Use'})).not.toBeInTheDocument();
++        expect(screen.queryByRole('link', {name: 'Privacy Policy'})).not.toBeInTheDocument();
+     });
+ 
+     test('should show load metric when license is loaded and API returns data', async () => {
+diff --git a/webapp/channels/src/components/about_build_modal/about_build_modal.tsx b/webapp/channels/src/components/about_build_modal/about_build_modal.tsx
+index 1560bfe17d4f..0c16d4d41599 100644
+--- a/webapp/channels/src/components/about_build_modal/about_build_modal.tsx
++++ b/webapp/channels/src/components/about_build_modal/about_build_modal.tsx
+@@ -15,11 +15,13 @@ import ExternalLink from 'components/external_link';
+ import Nbsp from 'components/html_entities/nbsp';
+ import MattermostLogo from 'components/widgets/icons/mattermost_logo';
+ 
+-import {AboutLinks} from 'utils/constants';
+ import {getSkuDisplayName} from 'utils/subscription';
+ 
+ import AboutBuildModalCloud from './about_build_modal_cloud/about_build_modal_cloud';
+ 
++// Mattermax: each release's page carries its source tarball (AGPL section 13).
++const SOURCE_CODE_URL = 'https://github.com/opnlabs/mattermax/releases/tag/';
++
+ type SocketStatus = {
+     connected: boolean;
+     serverHostname: string | undefined;
+@@ -84,12 +86,7 @@ export default function AboutBuildModal(props: Props) {
+         );
+     }
+ 
+-    let title = (
+-        <FormattedMessage
+-            id='about.teamEditiont0'
+-            defaultMessage='Team Edition'
+-        />
+-    );
++    let title: React.ReactNode = null;
+ 
+     let subTitle = (
+         <FormattedMessage
+@@ -101,15 +98,10 @@ export default function AboutBuildModal(props: Props) {
+     let learnMore = (
+         <div>
+             <FormattedMessage
+-                id='about.teamEditionLearn'
+-                defaultMessage='Join the Mattermost community at '
++                id='about.basedOn'
++                defaultMessage='Based on Mattermost open source software. Not affiliated with or endorsed by Mattermost, Inc.'
++                description='Attribution line in the About dialog, naming the upstream project the product is built from.'
+             />
+-            <ExternalLink
+-                location='about_build_modal'
+-                href='https://mattermost.com/community/'
+-            >
+-                {'mattermost.com/community/'}
+-            </ExternalLink>
+         </div>
+     );
+ 
+@@ -183,32 +175,6 @@ export default function AboutBuildModal(props: Props) {
+         }
+     }
+ 
+-    const termsOfService = (
+-        <ExternalLink
+-            location='about_build_modal'
+-            id='tosLink'
+-            href={AboutLinks.TERMS_OF_SERVICE}
+-        >
+-            <FormattedMessage
+-                id='about.tos'
+-                defaultMessage='Terms of Use'
+-            />
+-        </ExternalLink>
+-    );
+-
+-    const privacyPolicy = (
+-        <ExternalLink
+-            id='privacyLink'
+-            location='about_build_modal'
+-            href={AboutLinks.PRIVACY_POLICY}
+-        >
+-            <FormattedMessage
+-                id='about.privacy'
+-                defaultMessage='Privacy Policy'
+-            />
+-        </ExternalLink>
+-    );
+-
+     const getServerVersionString = () => {
+         const version = config.BuildNumber === 'dev' ? config.BuildNumber : config.Version;
+         const fipsSuffix = config.IsFipsEnabled === 'true' ? ' (FIPS)' : '';
+@@ -380,10 +346,22 @@ export default function AboutBuildModal(props: Props) {
+                                 }}
+                             />
+                         </div>
+-                        <div className='about-modal__links'>
+-                            {termsOfService}
+-                            {' - '}
+-                            {privacyPolicy}
++                        <div>
++                            <FormattedMessage
++                                id='about.sourceCode'
++                                defaultMessage='Mattermost is licensed under the GNU AGPL v3.0. <link>Source code</link>'
++                                description='License notice in the About dialog; <link> wraps a link to the source code of the running version.'
++                                values={{
++                                    link: (msg: React.ReactNode) => (
++                                        <ExternalLink
++                                            location='about_build_modal'
++                                            href={SOURCE_CODE_URL + config.BuildNumber}
++                                        >
++                                            {msg}
++                                        </ExternalLink>
++                                    ),
++                                }}
++                            />
+                         </div>
+                     </div>
+                 </div>
+diff --git a/webapp/channels/src/i18n/en.json b/webapp/channels/src/i18n/en.json
+index 7c22f8a2d496..fe23733f5cf8 100644
+--- a/webapp/channels/src/i18n/en.json
++++ b/webapp/channels/src/i18n/en.json
+@@ -1,4 +1,8 @@
+ {
++  "about.basedOn": {
++    "defaultMessage": "Based on Mattermost open source software. Not affiliated with or endorsed by Mattermost, Inc.",
++    "description": "Attribution line in the About dialog, naming the upstream project the product is built from."
++  },
+   "about.buildnumber": {
+     "defaultMessage": "Build Number:",
+     "description": "Field label in the About Mattermost dialog; the build number value follows the colon."
+@@ -63,10 +67,6 @@
+     "defaultMessage": "Learn more about Mattermost {planName} at {link}",
+     "description": "Line in the About Mattermost dialog; {planName} is the subscription plan name and {link} is a website URL."
+   },
+-  "about.privacy": {
+-    "defaultMessage": "Privacy Policy",
+-    "description": "Link text in the About Mattermost dialog footer pointing to the privacy policy."
+-  },
+   "about.serverDisconnected": {
+     "defaultMessage": "disconnected",
+     "description": "Status word shown in the About Mattermost dialog in place of the hostname when the server connection is lost; lowercase in English."
+@@ -83,18 +83,14 @@
+     "defaultMessage": "Server Version:",
+     "description": "Field label in the About Mattermost dialog; the server version follows the colon."
+   },
+-  "about.teamEditionLearn": {
+-    "defaultMessage": "Join the Mattermost community at ",
+-    "description": "Sentence in the About Mattermost dialog for Team Edition; a community URL is appended directly after it, so the trailing space matters."
++  "about.sourceCode": {
++    "defaultMessage": "Mattermost is licensed under the GNU AGPL v3.0. <link>Source code</link>",
++    "description": "License notice in the About dialog; <link> wraps a link to the source code of the running version."
+   },
+   "about.teamEditionSt": {
+     "defaultMessage": "All your team communication in one place, instantly searchable and accessible anywhere.",
+     "description": "Tagline shown under the Team Edition name in the About Mattermost dialog."
+   },
+-  "about.teamEditiont0": {
+-    "defaultMessage": "Team Edition",
+-    "description": "Edition name displayed in the About Mattermost dialog for the free Team Edition."
+-  },
+   "about.teamEditiont1": {
+     "defaultMessage": "Enterprise Edition",
+     "description": "Edition name displayed in the About Mattermost dialog for licensed Enterprise Edition servers."
+@@ -103,10 +99,6 @@
+     "defaultMessage": "About {appTitle}",
+     "description": "Title of the About dialog; {appTitle} is the configured site or application name."
+   },
+-  "about.tos": {
+-    "defaultMessage": "Terms of Use",
+-    "description": "Link text in the About Mattermost dialog footer pointing to the terms of use ('Terms of Use')."
+-  },
+   "about.version": {
+     "defaultMessage": "Mattermost Version:",
+     "description": "Field label in the About Mattermost dialog; the Mattermost version number follows the colon."

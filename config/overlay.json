@@ -1,0 +1,27 @@
+{
+    "TeamSettings": {
+        "SiteName": "Mattermax"
+    },
+    "SupportSettings": {
+        "AboutLink": "https://github.com/opnlabs/mattermax",
+        "ReportAProblemLink": "https://github.com/opnlabs/mattermax/issues",
+        "TermsOfServiceLink": "",
+        "PrivacyPolicyLink": "",
+        "EnableAskCommunityLink": false
+    },
+    "LogSettings": {
+        "EnableDiagnostics": false,
+        "EnableSentry": false
+    },
+    "ServiceSettings": {
+        "EnableSecurityFixAlert": false
+    },
+    "AnnouncementSettings": {
+        "AdminNoticesEnabled": false,
+        "UserNoticesEnabled": false,
+        "NoticesURL": ""
+    },
+    "PluginSettings": {
+        "EnableRemoteMarketplace": false
+    }
+}

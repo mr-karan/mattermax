@@ -1,0 +1,71 @@
+{
+  "include": [
+    "server/**",
+    "webapp/**"
+  ],
+  "exclude": [
+    "server/enterprise/**",
+    "server/build/**",
+    "server/channels/db/migrations/**",
+    "**/testdata/**",
+    "**/*.md",
+    "**/go.mod",
+    "**/go.sum",
+    "**/package.json",
+    "**/package-lock.json"
+  ],
+  "replace": [
+    {
+      "id": "footer-copyright",
+      "find": "`© \\$\\{new Date\\(\\)\\.getFullYear\\(\\)\\} Mattermost Inc\\.`",
+      "replace": "''",
+      "files": [
+        "webapp/channels/src/components/header_footer_route/footer.tsx"
+      ]
+    },
+    {
+      "id": "footer-copyright-legacy",
+      "find": "`© 2015-\\$\\{new Date\\(\\)\\.getFullYear\\(\\)\\} Mattermost, Inc\\.`",
+      "replace": "''",
+      "files": [
+        "webapp/channels/src/components/header_footer_template/header_footer_template.tsx"
+      ]
+    },
+    {
+      "id": "team-edition",
+      "find": "\\bMattermost Team Edition\\b",
+      "replace": "Mattermax"
+    },
+    {
+      "id": "product-name",
+      "find": "\\bMattermost\\b",
+      "replace": "Mattermax"
+    },
+    {
+      "id": "cli-command-name",
+      "find": "\"mattermost\"",
+      "replace": "\"mattermax\"",
+      "files": [
+        "server/cmd/mattermost/commands/root.go"
+      ]
+    },
+    {
+      "id": "cli-examples",
+      "find": "(?<![/\\w.-])mattermost(?= [a-z])",
+      "replace": "mattermax",
+      "files": [
+        "server/cmd/mattermost/commands/*.go"
+      ]
+    }
+  ],
+  "icons": [
+    "webapp/channels/src/images/favicon/*",
+    "webapp/channels/src/images/logo*",
+    "webapp/channels/src/images/icon50x50.png",
+    "webapp/channels/src/images/icon64x64.png",
+    "webapp/channels/src/images/emoji/mattermost.png",
+    "webapp/channels/src/components/widgets/icons/mattermost_logo.tsx",
+    "webapp/channels/src/components/common/svg_images_components/logo_dark_blue_svg.tsx",
+    "webapp/channels/src/components/initial_loading_screen/initial_loading_screen_template.html"
+  ]
+}

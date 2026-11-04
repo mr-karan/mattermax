@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Wed, 4 Nov 2026 11:52:55 +0530
+Subject: [PATCH] feat: make the terms of use and privacy policy links optional
+
+Clear a blank TermsOfServiceLink instead of resetting it to Mattermost's
+terms, as upstream already does for PrivacyPolicyLink. Show the sign-up
+agreement checkbox only when a policy link is configured, naming only the
+links that are, and don't require it otherwise.
+
+Mattermax-Patch: optional-policy-links.patch
+---
+ server/public/model/config.go                 |  4 +-
+ server/public/model/config_test.go            | 18 +++++
+ .../src/components/signup/signup.test.tsx     | 26 +++++++
+ .../channels/src/components/signup/signup.tsx | 74 +++++++++++--------
+ webapp/channels/src/i18n/en.json              |  8 ++
+ 5 files changed, 98 insertions(+), 32 deletions(-)
+
+diff --git a/server/public/model/config.go b/server/public/model/config.go
+index 2d79070a18ec..a80835f1abd8 100644
+--- a/server/public/model/config.go
++++ b/server/public/model/config.go
+@@ -2402,8 +2402,10 @@ type SupportSettings struct {
+ }
+ 
+ func (s *SupportSettings) SetDefaults() {
++	// Mattermax: a blank or unsafe link is cleared, as for PrivacyPolicyLink,
++	// instead of being reset to the default terms of use link.
+ 	if !isSafeLink(s.TermsOfServiceLink) {
+-		*s.TermsOfServiceLink = SupportSettingsDefaultTermsOfServiceLink
++		*s.TermsOfServiceLink = ""
+ 	}
+ 
+ 	if s.TermsOfServiceLink == nil {
+diff --git a/server/public/model/config_test.go b/server/public/model/config_test.go
+index 52b7417302dd..63bd483b5f85 100644
+--- a/server/public/model/config_test.go
++++ b/server/public/model/config_test.go
+@@ -710,6 +710,24 @@ func TestConfigDefaultFileSettingsDirectory(t *testing.T) {
+ 	require.Equal(t, *c1.FileSettings.Directory, "./data/")
+ }
+ 
++func TestConfigSupportSettingsPolicyLinks(t *testing.T) {
++	t.Run("defaults", func(t *testing.T) {
++		c := Config{}
++		c.SetDefaults()
++		require.Equal(t, SupportSettingsDefaultTermsOfServiceLink, *c.SupportSettings.TermsOfServiceLink)
++		require.Equal(t, SupportSettingsDefaultPrivacyPolicyLink, *c.SupportSettings.PrivacyPolicyLink)
++	})
++
++	for name, link := range map[string]string{"blank": "", "unsafe": "javascript:alert(1)"} {
++		t.Run(name, func(t *testing.T) {
++			c := Config{SupportSettings: SupportSettings{TermsOfServiceLink: new(link), PrivacyPolicyLink: new(link)}}
++			c.SetDefaults()
++			require.Equal(t, "", *c.SupportSettings.TermsOfServiceLink)
++			require.Equal(t, "", *c.SupportSettings.PrivacyPolicyLink)
++		})
++	}
++}
++
+ func TestConfigDefaultEmailNotificationContentsType(t *testing.T) {
+ 	c1 := Config{}
+ 	c1.SetDefaults()
+diff --git a/webapp/channels/src/components/signup/signup.test.tsx b/webapp/channels/src/components/signup/signup.test.tsx
+index 3ae52ad5e536..0816b6405615 100644
+--- a/webapp/channels/src/components/signup/signup.test.tsx
++++ b/webapp/channels/src/components/signup/signup.test.tsx
+@@ -148,6 +148,8 @@ describe('components/signup/Signup', () => {
+             SamlLoginButtonText: '',
+             EnableCustomBrand: 'false',
+             CustomBrandText: '',
++            TermsOfServiceLink: 'https://mattermost.com/terms',
++            PrivacyPolicyLink: 'https://mattermost.com/privacy',
+             CustomDescriptionText: '',
+             SiteName: 'Mattermost',
+             ExperimentalPrimaryTeam: '',
+@@ -495,4 +497,28 @@ describe('components/signup/Signup', () => {
+         const enabledButton = screen.getByRole('button', {name: /Create account/i});
+         expect(enabledButton).not.toBeDisabled();
+     });
++
++    it('should not ask for agreement when no policy links are configured', async () => {
++        mockConfig.TermsOfServiceLink = '';
++        mockConfig.PrivacyPolicyLink = '';
++
++        renderWithContext(<Signup/>, mockState);
++
++        expect(screen.queryByRole('checkbox', {name: /terms and privacy policy checkbox/i})).not.toBeInTheDocument();
++
++        await userEvent.type(screen.getByLabelText('Email address'), 'test@example.com');
++        await userEvent.type(screen.getByLabelText('Choose a Username'), 'testuser');
++        await userEvent.type(screen.getByLabelText('Choose a Password'), 'ValidPassword123!');
++
++        expect(screen.getByRole('button', {name: /Create account/i})).not.toBeDisabled();
++    });
++
++    it('should name only the configured policy link', () => {
++        mockConfig.TermsOfServiceLink = '';
++
++        const {container: signupContainer} = renderWithContext(<Signup/>, mockState);
++
++        expect(signupContainer).toHaveTextContent('I agree to the Privacy Policy');
++        expect(signupContainer).not.toHaveTextContent('Acceptable Use Policy');
++    });
+ });
+diff --git a/webapp/channels/src/components/signup/signup.tsx b/webapp/channels/src/components/signup/signup.tsx
+index 44adeeab25a4..652e8a09dc25 100644
+--- a/webapp/channels/src/components/signup/signup.tsx
++++ b/webapp/channels/src/components/signup/signup.tsx
+@@ -4,7 +4,7 @@
+ import classNames from 'classnames';
+ import throttle from 'lodash/throttle';
+ import React, {useState, useEffect, useRef, useCallback} from 'react';
+-import {useIntl} from 'react-intl';
++import {defineMessage, useIntl} from 'react-intl';
+ import {useSelector, useDispatch} from 'react-redux';
+ import {useLocation, useHistory, Route} from 'react-router-dom';
+ 
+@@ -143,7 +143,17 @@ const Signup = ({onCustomizeHeader}: SignupProps) => {
+ 
+     const enableExternalSignup = enableSignUpWithGitLab || enableSignUpWithOffice365 || enableSignUpWithGoogle || enableSignUpWithOpenId || enableLDAP || enableSAML;
+     const hasError = Boolean(emailError || nameError || passwordError || serverError || alertBanner);
+-    const canSubmit = Boolean(email && name && password && acceptedTerms) && !hasError && !loading;
++
++    // Mattermax: ask for agreement only to the policy links that are configured.
++    const hasPolicyLinks = Boolean(TermsOfServiceLink || PrivacyPolicyLink);
++    let policyAgreementMessage = defineMessage({id: 'signup.terms_and_privacy.checkmark.text', defaultMessage: 'I agree to the <termsOfUseLink>Acceptable Use Policy</termsOfUseLink> and the <privacyPolicyLink>Privacy Policy</privacyPolicyLink>'});
++    if (!PrivacyPolicyLink) {
++        policyAgreementMessage = defineMessage({id: 'signup.terms.checkmark.text', defaultMessage: 'I agree to the <termsOfUseLink>Acceptable Use Policy</termsOfUseLink>', description: 'Sign-up checkbox label when only a terms of use link is configured; <termsOfUseLink> wraps a link to it.'});
++    } else if (!TermsOfServiceLink) {
++        policyAgreementMessage = defineMessage({id: 'signup.privacy.checkmark.text', defaultMessage: 'I agree to the <privacyPolicyLink>Privacy Policy</privacyPolicyLink>', description: 'Sign-up checkbox label when only a privacy policy link is configured; <privacyPolicyLink> wraps a link to it.'});
++    }
++
++    const canSubmit = Boolean(email && name && password && (acceptedTerms || !hasPolicyLinks)) && !hasError && !loading;
+     const passwordConfig = useSelector(getPasswordConfig);
+     const {error: passwordInfo} = isValidPassword('', passwordConfig, intl);
+ 
+@@ -785,35 +795,37 @@ const Signup = ({onCustomizeHeader}: SignupProps) => {
+                                         info={passwordInfo as string}
+                                         error={passwordError}
+                                     />
+-                                    <CheckInput
+-                                        id='signup-body-card-form-check-terms-and-privacy'
+-                                        ariaLabel={formatMessage({id: 'signup.terms_and_privacy.checkmark.box', defaultMessage: 'Terms and privacy policy checkbox'})}
+-                                        name='terms'
+-                                        onChange={() => setAcceptedTerms(!acceptedTerms)}
+-                                        text={
+-                                            formatMessage(
+-                                                {id: 'signup.terms_and_privacy.checkmark.text', defaultMessage: 'I agree to the <termsOfUseLink>Acceptable Use Policy</termsOfUseLink> and the <privacyPolicyLink>Privacy Policy</privacyPolicyLink>'},
+-                                                {
+-                                                    privacyPolicyLink: (chunks: React.ReactNode | readonly React.ReactNode[]) => (
+-                                                        <ExternalLink
+-                                                            href={PrivacyPolicyLink as string}
+-                                                            location='signup-privacy-policy'
+-                                                        >
+-                                                            {chunks}
+-                                                        </ExternalLink>
+-                                                    ),
+-                                                    termsOfUseLink: (chunks: React.ReactNode | readonly React.ReactNode[]) => (
+-                                                        <ExternalLink
+-                                                            href={TermsOfServiceLink as string}
+-                                                            location='signup-terms-of-use'
+-                                                        >
+-                                                            {chunks}
+-                                                        </ExternalLink>
+-                                                    ),
+-                                                },
+-                                            )}
+-                                        checked={acceptedTerms}
+-                                    />
++                                    {hasPolicyLinks && (
++                                        <CheckInput
++                                            id='signup-body-card-form-check-terms-and-privacy'
++                                            ariaLabel={formatMessage({id: 'signup.terms_and_privacy.checkmark.box', defaultMessage: 'Terms and privacy policy checkbox'})}
++                                            name='terms'
++                                            onChange={() => setAcceptedTerms(!acceptedTerms)}
++                                            text={
++                                                formatMessage(
++                                                    policyAgreementMessage,
++                                                    {
++                                                        privacyPolicyLink: (chunks: React.ReactNode | readonly React.ReactNode[]) => (
++                                                            <ExternalLink
++                                                                href={PrivacyPolicyLink as string}
++                                                                location='signup-privacy-policy'
++                                                            >
++                                                                {chunks}
++                                                            </ExternalLink>
++                                                        ),
++                                                        termsOfUseLink: (chunks: React.ReactNode | readonly React.ReactNode[]) => (
++                                                            <ExternalLink
++                                                                href={TermsOfServiceLink as string}
++                                                                location='signup-terms-of-use'
++                                                            >
++                                                                {chunks}
++                                                            </ExternalLink>
++                                                        ),
++                                                    },
++                                                )}
++                                            checked={acceptedTerms}
++                                        />
++                                    )}
+                                     <SaveButton
+                                         extraClasses='signup-body-card-form-button-submit large'
+                                         saving={isWaiting}
+diff --git a/webapp/channels/src/i18n/en.json b/webapp/channels/src/i18n/en.json
+index fe23733f5cf8..631a13668147 100644
+--- a/webapp/channels/src/i18n/en.json
++++ b/webapp/channels/src/i18n/en.json
+@@ -30059,6 +30059,10 @@
+     "defaultMessage": "AD/LDAP Credentials",
+     "description": "Fallback button label on the signup page for creating an account via AD/LDAP login when the admin has not set a custom name."
+   },
++  "signup.privacy.checkmark.text": {
++    "defaultMessage": "I agree to the <privacyPolicyLink>Privacy Policy</privacyPolicyLink>",
++    "description": "Sign-up checkbox label when only a privacy policy link is configured; <privacyPolicyLink> wraps a link to it."
++  },
+   "signup.terms_and_privacy.checkmark.box": {
+     "defaultMessage": "Terms and privacy policy checkbox",
+     "description": "Accessible label of the checkbox on the signup form for accepting the terms and privacy policy."
+@@ -30067,6 +30071,10 @@
+     "defaultMessage": "I agree to the <termsOfUseLink>Acceptable Use Policy</termsOfUseLink> and the <privacyPolicyLink>Privacy Policy</privacyPolicyLink>",
+     "description": "Consent text next to the signup checkbox; <termsOfUseLink> and <privacyPolicyLink> tags wrap links to the respective policies."
+   },
++  "signup.terms.checkmark.text": {
++    "defaultMessage": "I agree to the <termsOfUseLink>Acceptable Use Policy</termsOfUseLink>",
++    "description": "Sign-up checkbox label when only a terms of use link is configured; <termsOfUseLink> wraps a link to it."
++  },
+   "signup.title": {
+     "defaultMessage": "Create Account | {siteName}",
+     "description": "Browser tab/window title of the account creation page; {siteName} is the server's configured site name."

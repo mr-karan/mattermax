@@ -1,0 +1,6 @@
+# Patch apply order. Written by `just export`; edit by hand only to disable
+# a patch by commenting it out with "# ".
+release-license.patch
+remove-user-limits.patch
+about-dialog.patch
+optional-policy-links.patch

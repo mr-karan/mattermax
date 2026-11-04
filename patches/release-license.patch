@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hariharan <14965074+cvhariharan@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 22:46:52 +0530
+Subject: [PATCH] chore: ship LICENSE.txt instead of the MIT compiled license
+
+The MIT compiled license covers only binaries produced by Mattermost, Inc.
+Mattermax builds its own binaries, which are licensed under the AGPL v3.0
+as LICENSE.txt describes, so package LICENSE.txt with the server instead.
+
+Mattermax-Patch: release-license.patch
+---
+ server/build/release.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/server/build/release.mk b/server/build/release.mk
+index 00694e217421..43eb07971249 100644
+--- a/server/build/release.mk
++++ b/server/build/release.mk
+@@ -212,7 +212,7 @@ ifeq ($(BUILD_ENTERPRISE_READY),true)
+ 	cp $(BUILD_ENTERPRISE_DIR)/ENTERPRISE-EDITION-LICENSE.txt $(DIST_PATH)
+ 	cp -L $(BUILD_ENTERPRISE_DIR)/cloud/config/cloud_defaults.json $(DIST_PATH)/config
+ else
+-	cp build/MIT-COMPILED-LICENSE.md $(DIST_PATH)
++	cp ../LICENSE.txt $(DIST_PATH)
+ endif
+ 	cp ../NOTICE.txt $(DIST_PATH)
+ 	cp ../README.md $(DIST_PATH)

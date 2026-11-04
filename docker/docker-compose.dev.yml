@@ -1,0 +1,48 @@
+# Build an image from the local `just build` output (work/build/dist) and run
+# it with PostgreSQL.
+#
+#   just build
+#   cd docker
+#   docker compose -f docker-compose.dev.yml up -d --build -V
+#
+# Open http://localhost:8065. After a change, run `just build` and the same
+# `up` command again. -V gives the new container a fresh config.json (with the
+# current overlay) instead of reusing the old one. `down -v` deletes the
+# database and data volumes.
+name: mattermax-dev
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mattermax
+      POSTGRES_PASSWORD: mattermax
+      POSTGRES_DB: mattermax
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mattermax", "-d", "mattermax"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mattermax:
+    image: mattermax:dev
+    build:
+      context: ../work/build/dist
+      dockerfile: ../../../docker/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mattermax:mattermax@db:5432/mattermax?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: http://localhost:8065
+    ports:
+      - "127.0.0.1:8065:8065"
+    volumes:
+      - data:/mattermax/data
+
+volumes:
+  db:
+  data:

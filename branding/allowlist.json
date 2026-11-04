@@ -1,0 +1,85 @@
+[
+  {
+    "id": "company",
+    "match": "\\bMattermost,? Inc\\b\\.?",
+    "reason": "Mattermost the company: copyright headers and legal attribution must stay"
+  },
+  {
+    "id": "upstream-attribution",
+    "match": "\\bBased on Mattermost\\b",
+    "reason": "The About dialog credits the upstream project Mattermax is built from"
+  },
+  {
+    "id": "editions",
+    "match": "\\bMattermost (Enterprise Advanced|Enterprise Edition|Enterprise|Professional|Entry|Cloud|Free)\\b",
+    "reason": "Mattermost's commercial editions; the upsell UI around them is removed by patches"
+  },
+  {
+    "id": "legal-documents",
+    "match": "\\bMattermost (Software Evaluation Agreement|Acceptable Use Policy)\\b",
+    "reason": "Mattermost's legal documents"
+  },
+  {
+    "id": "services",
+    "match": "\\bMattermost (Hosted Push Notification Service|Translation Server|App Directory|Marketplace)\\b",
+    "reason": "Services run by Mattermost"
+  },
+  {
+    "id": "plugins",
+    "match": "\\bMattermost (Agents|Playbooks|Boards|Calls|Copilot)\\b",
+    "reason": "Names of plugins made by Mattermost"
+  },
+  {
+    "id": "desktop-app",
+    "match": "\\bMattermost [Dd]esktop( [Aa]pps?)?\\b",
+    "reason": "Users run the official Mattermost desktop app"
+  },
+  {
+    "id": "user-agent",
+    "match": "\\bMattermost\\b",
+    "files": [
+      "server/channels/app/user_agent*.go",
+      "server/channels/web/handlers*.go",
+      "webapp/platform/shared/src/utils/user_agent/**",
+      "webapp/channels/src/packages/mattermost-redux/src/utils/browser_info*"
+    ],
+    "reason": "User-agent detection of the official desktop and mobile apps ('Mattermost/', 'Mattermost Mobile')"
+  },
+  {
+    "id": "http-headers",
+    "match": "\\b(X-)?Mattermost(-[A-Za-z]+)+",
+    "files": [
+      "**/*.go",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx"
+    ],
+    "reason": "HTTP header names (Mattermost-User-Id, X-Mattermost-...) used by plugins and clients"
+  },
+  {
+    "id": "http-headers-in-text",
+    "match": "\\bX-Mattermost(-[A-Za-z]+)+",
+    "reason": "X-Mattermost-... header names quoted in UI text and translations; same header as in code"
+  },
+  {
+    "id": "legacy-theme-ids",
+    "match": "'Mattermost( Dark)?'|^\\s*Mattermost(?=\\s*:)",
+    "files": [
+      "webapp/channels/src/packages/mattermost-redux/src/selectors/entities/preferences*",
+      "webapp/channels/src/packages/mattermost-redux/src/utils/theme_utils*"
+    ],
+    "reason": "Legacy theme IDs stored in user preferences, as quoted strings and as the bare object key in theme_utils.ts"
+  },
+  {
+    "id": "code-identifiers",
+    "match": "^\\s*Mattermost(?=\\s*[:=])|\\.Mattermost\\b",
+    "files": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx"
+    ],
+    "reason": "Code identifiers: object keys and enum members (AuthorType.Mattermost) keep their upstream names"
+  }
+]
