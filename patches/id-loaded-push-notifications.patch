@@ -8,7 +8,8 @@ Mattermax-Patch: id-loaded-push-notifications.patch
  server/channels/app/notification_id_loaded.go | 68 ++++++++++++++++++
  .../app/notification_id_loaded_test.go        | 69 +++++++++++++++++++
  .../admin_console/admin_definition.tsx        | 24 -------
- 3 files changed, 137 insertions(+), 24 deletions(-)
+ webapp/channels/src/i18n/en.json              |  4 --
+ 4 files changed, 137 insertions(+), 28 deletions(-)
  create mode 100644 server/channels/app/notification_id_loaded.go
  create mode 100644 server/channels/app/notification_id_loaded_test.go
 
@@ -203,3 +204,18 @@ index ca97d3af75c6..ab59c1995221 100644
                              isDisabled: it.not(it.userHasWritePermissionOnResource(RESOURCE_KEYS.SITE.NOTIFICATIONS)),
                          },
                          {
+diff --git a/webapp/channels/src/i18n/en.json b/webapp/channels/src/i18n/en.json
+index 631a13668147..9a30cbfa9c8e 100644
+--- a/webapp/channels/src/i18n/en.json
++++ b/webapp/channels/src/i18n/en.json
+@@ -5283,10 +5283,6 @@
+     "defaultMessage": "Generic description with only sender name",
+     "description": "Dropdown option for the Push Notification Contents setting: send only the sender name."
+   },
+-  "admin.environment.notifications.pushContents.help": {
+-    "defaultMessage": "**Generic description with only sender name** - Includes only the name of the person who sent the message in push notifications, with no information about channel name or message contents.\n **Generic description with sender and channel names** - Includes the name of the person who sent the message and the channel it was sent in, but not the message contents.\n **Full message content sent in the notification payload** - Includes the message contents in the push notification payload that is relayed through Apple's Push Notification Service (APNS) or Google's Firebase Cloud Messaging (FCM). It is **highly recommended** this option only be used with an \"https\" protocol to encrypt the connection and protect confidential information sent in messages.",
+-    "description": "Help text for the Push Notification Contents setting explaining each option; bold markdown (**) marks the option names, which should match the dropdown option translations."
+-  },
+   "admin.environment.notifications.pushContents.idLoaded": {
+     "defaultMessage": "Full message content fetched from the server on receipt",
+     "description": "Dropdown option for the Push Notification Contents setting: send only a message ID and fetch content from the server on receipt (ID-loaded push)."
