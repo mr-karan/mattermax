@@ -151,3 +151,20 @@ the configured values (`server/config/client.go`), and the System Console page
 is gated only by its permission (`admin_definition.tsx`). Its feature
 discovery twin stays in the definition and is removed at runtime by
 `remove-upsell-pages.patch`.
+
+### unlock-custom-groups.patch
+
+2026-11-12. Allow custom user groups without a license: creating and managing
+groups, `@group` mentions with autocomplete, adding groups to channels, and
+the `ServiceSettings.EnableCustomGroups` System Console setting. Upstream
+implements custom groups in its open-source code and rejects them on servers
+without a license. The patch removes those checks from the client config
+(`server/config/client.go`), the custom group endpoints (`api4/group.go`), the
+member counts used by the mention confirmation (`api4/channel.go`) and group
+mentions (`app/notification.go`). The web app loads, offers and highlights
+custom groups without a license (`team_controller/actions`,
+`status_profile_polling.ts`, `textbox`, `wysiwyg_suggestion_list.tsx`,
+`permissions_tree.tsx`, `admin_definition.tsx`). LDAP and plugin groups stay
+gated: without a license their endpoints return 501, and group listings,
+lookups by name and mentions see only custom groups, for which
+`GroupStore.GetByNames` now honours the requested source.

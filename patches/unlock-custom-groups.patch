@@ -1,0 +1,641 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Karan Sharma <hello@mrkaran.dev>
+Date: Thu, 12 Nov 2026 22:17:28 +0530
+Subject: [PATCH] feat: custom user groups without a license
+
+Mattermax-Patch: unlock-custom-groups.patch
+---
+ server/channels/api4/channel.go               |  5 --
+ server/channels/api4/channel_test.go          |  7 +-
+ server/channels/api4/group.go                 | 73 ++++--------------
+ server/channels/api4/group_test.go            | 76 ++++++++++++++++++-
+ server/channels/api4/user_test.go             |  4 +-
+ server/channels/app/notification.go           |  8 +-
+ server/channels/app/notification_test.go      | 44 ++++++++++-
+ server/channels/store/sqlstore/group_store.go |  4 +
+ server/config/client.go                       |  6 +-
+ server/config/client_test.go                  | 24 ++++++
+ .../admin_console/admin_definition.tsx        |  3 -
+ .../permissions_tree/permissions_tree.tsx     |  2 +-
+ .../wysiwyg_suggestion_list.tsx               |  2 +-
+ .../team_controller/actions/index.ts          |  4 +-
+ .../channels/src/components/textbox/index.ts  |  3 +-
+ .../src/actions/status_profile_polling.ts     |  3 +-
+ 16 files changed, 171 insertions(+), 97 deletions(-)
+
+diff --git a/server/channels/api4/channel.go b/server/channels/api4/channel.go
+index b01f609858f4..4e9602fda375 100644
+--- a/server/channels/api4/channel.go
++++ b/server/channels/api4/channel.go
+@@ -3103,11 +3103,6 @@ func channelMembersMinusGroupMembers(c *Context, w http.ResponseWriter, r *http.
+ }
+ 
+ func channelMemberCountsByGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.channelMemberCountsByGroup", "api.channel.channel_member_counts_by_group.license.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	c.RequireChannelId()
+ 	if c.Err != nil {
+ 		return
+diff --git a/server/channels/api4/channel_test.go b/server/channels/api4/channel_test.go
+index fd20a8a671bc..6603c7d4c8c9 100644
+--- a/server/channels/api4/channel_test.go
++++ b/server/channels/api4/channel_test.go
+@@ -7645,9 +7645,10 @@ func TestGetChannelMemberCountsByGroup(t *testing.T) {
+ 	th := Setup(t).InitBasic(t)
+ 
+ 	channel := th.BasicChannel
+-	t.Run("Errors without a license", func(t *testing.T) {
+-		_, _, err := th.SystemAdminClient.GetChannelMemberCountsByGroup(context.Background(), channel.Id, false, "")
+-		CheckErrorID(t, err, "api.channel.channel_member_counts_by_group.license.error")
++	t.Run("Works without a license", func(t *testing.T) {
++		memberCounts, _, err := th.SystemAdminClient.GetChannelMemberCountsByGroup(context.Background(), channel.Id, false, "")
++		require.NoError(t, err)
++		require.Equal(t, []*model.ChannelMemberCountByGroup{}, memberCounts)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicense())
+diff --git a/server/channels/api4/group.go b/server/channels/api4/group.go
+index 797699c86d74..2442c9993b50 100644
+--- a/server/channels/api4/group.go
++++ b/server/channels/api4/group.go
+@@ -105,12 +105,6 @@ func (api *API) InitGroup() {
+ }
+ 
+ func getGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+-
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -156,11 +150,6 @@ func getGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func createGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	var group *model.GroupWithUserIds
+ 	if err := json.NewDecoder(r.Body).Decode(&group); err != nil || group == nil {
+ 		c.SetInvalidParamWithErr("group", err)
+@@ -218,11 +207,6 @@ func createGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func patchGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -768,11 +752,6 @@ func verifySchemeAdminAssignmentPermission(c *Context, syncableType model.GroupS
+ }
+ 
+ func getGroupMembers(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -918,12 +897,6 @@ func getGroupsByChannel(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func getGroupsByNames(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+-
+ 	groupNames, err := model.SortedArrayFromJSON(r.Body)
+ 	if err != nil {
+ 		c.Err = model.NewAppError("getGroupsByNames", model.PayloadParseError, nil, "", http.StatusBadRequest).Wrap(err)
+@@ -940,6 +913,9 @@ func getGroupsByNames(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	opts := model.GroupSearchOpts{
+ 		FilterAllowReference: filterAllowReference,
+ 	}
++	if c.App.Channels().License() == nil {
++		opts.Source = model.GroupSourceCustom
++	}
+ 
+ 	groups, appErr := c.App.GetGroupsByNames(groupNames, opts)
+ 	if appErr != nil {
+@@ -1123,12 +1099,6 @@ func getGroupsAssociatedToChannelsByTeam(c *Context, w http.ResponseWriter, r *h
+ func getGroups(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	var teamID, NotAssociatedToChannelID, ChannelIDForMemberCount string
+ 
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+-
+ 	source := c.Params.GroupSource
+ 
+ 	onlySyncableSources := r.URL.Query().Get("only_syncable_sources") == "true"
+@@ -1145,6 +1115,14 @@ func getGroups(c *Context, w http.ResponseWriter, r *http.Request) {
+ 		ChannelIDForMemberCount = id
+ 	}
+ 
++	if source == "" && c.App.Channels().License() == nil {
++		if onlySyncableSources {
++			c.Err = model.NewAppError("Api4.getGroups", "api.license_error", nil, "", http.StatusNotImplemented)
++			return
++		}
++		source = model.GroupSourceCustom
++	}
++
+ 	// If they specify the group_source as custom when the feature is disabled, throw an error
+ 	if appErr := licensedAndConfiguredForGroupBySource(c.App, source); appErr != nil {
+ 		appErr.Where = "Api4.getGroups"
+@@ -1293,11 +1271,6 @@ func getGroups(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func deleteGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -1347,12 +1320,6 @@ func deleteGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func restoreGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+-
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -1403,11 +1370,6 @@ func restoreGroup(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func addGroupMembers(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -1471,11 +1433,6 @@ func addGroupMembers(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func deleteGroupMembers(c *Context, w http.ResponseWriter, r *http.Request) {
+-	permissionErr := requireLicense(c)
+-	if permissionErr != nil {
+-		c.Err = permissionErr
+-		return
+-	}
+ 	c.RequireGroupId()
+ 	if c.Err != nil {
+ 		return
+@@ -1566,8 +1523,8 @@ func hasPermissionToReadGroupMembers(c *web.Context, groupID string) *model.AppE
+ func licensedAndConfiguredForGroupBySource(app *app.App, source model.GroupSource) *model.AppError {
+ 	lic := app.Srv().License()
+ 
+-	if lic == nil {
+-		return model.NewAppError("", "api.license_error", nil, "", http.StatusForbidden)
++	if lic == nil && source != model.GroupSourceCustom && source != "" {
++		return model.NewAppError("", "api.license_error", nil, "", http.StatusNotImplemented)
+ 	}
+ 
+ 	if source == model.GroupSourceLdap && !*lic.Features.LDAPGroups {
+@@ -1578,10 +1535,6 @@ func licensedAndConfiguredForGroupBySource(app *app.App, source model.GroupSourc
+ 		return model.NewAppError("", "api.ldap_groups.license_error", nil, "", http.StatusForbidden)
+ 	}
+ 
+-	if source == model.GroupSourceCustom && !model.MinimumProfessionalLicense(lic) {
+-		return model.NewAppError("", "api.custom_groups.license_error", nil, "", http.StatusBadRequest)
+-	}
+-
+ 	if source == model.GroupSourceCustom && !*app.Config().ServiceSettings.EnableCustomGroups {
+ 		return model.NewAppError("", "api.custom_groups.feature_disabled", nil, "", http.StatusBadRequest)
+ 	}
+diff --git a/server/channels/api4/group_test.go b/server/channels/api4/group_test.go
+index 2d2dc486b80e..c4e21850bf1d 100644
+--- a/server/channels/api4/group_test.go
++++ b/server/channels/api4/group_test.go
+@@ -33,7 +33,7 @@ func TestGetGroup(t *testing.T) {
+ 
+ 	_, response, err := th.Client.GetGroup(context.Background(), g.Id, "")
+ 	require.Error(t, err)
+-	CheckNotImplementedStatus(t, response)
++	CheckForbiddenStatus(t, response)
+ 
+ 	_, response, err = th.SystemAdminClient.GetGroup(context.Background(), g.Id, "")
+ 	require.Error(t, err)
+@@ -255,6 +255,65 @@ func TestUndeleteGroup(t *testing.T) {
+ 	CheckNotFoundStatus(t, response)
+ }
+ 
++func TestCustomGroupsWithoutLicense(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t).InitBasic(t)
++	th.App.Srv().SetLicense(nil)
++
++	group, response, err := th.Client.CreateGroup(context.Background(), &model.Group{
++		DisplayName:    "dn_" + model.NewId(),
++		Name:           new("name" + model.NewId()),
++		Source:         model.GroupSourceCustom,
++		AllowReference: true,
++	})
++	require.NoError(t, err)
++	CheckCreatedStatus(t, response)
++
++	_, _, err = th.Client.GetGroup(context.Background(), group.Id, "")
++	require.NoError(t, err)
++
++	newDisplayName := "dn_" + model.NewId()
++	patched, _, err := th.Client.PatchGroup(context.Background(), group.Id, &model.GroupPatch{DisplayName: &newDisplayName})
++	require.NoError(t, err)
++	assert.Equal(t, newDisplayName, patched.DisplayName)
++
++	_, _, err = th.Client.UpsertGroupMembers(context.Background(), group.Id, &model.GroupModifyMembers{UserIds: []string{th.BasicUser2.Id}})
++	require.NoError(t, err)
++
++	members, _, err := th.Client.GetGroupMembers(context.Background(), group.Id)
++	require.NoError(t, err)
++	assert.Equal(t, 1, members.Count)
++
++	groups, _, err := th.SystemAdminClient.GetGroupsByNames(context.Background(), []string{*group.Name, *th.Group.Name})
++	require.NoError(t, err)
++	require.Len(t, groups, 1)
++	assert.Equal(t, group.Id, groups[0].Id)
++
++	groups, _, err = th.SystemAdminClient.GetGroups(context.Background(), model.GroupSearchOpts{})
++	require.NoError(t, err)
++	require.Len(t, groups, 1)
++	assert.Equal(t, group.Id, groups[0].Id)
++
++	_, _, err = th.Client.DeleteGroupMembers(context.Background(), group.Id, &model.GroupModifyMembers{UserIds: []string{th.BasicUser2.Id}})
++	require.NoError(t, err)
++
++	_, _, err = th.Client.DeleteGroup(context.Background(), group.Id)
++	require.NoError(t, err)
++
++	_, _, err = th.Client.RestoreGroup(context.Background(), group.Id, "")
++	require.NoError(t, err)
++
++	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.EnableCustomGroups = false })
++	_, response, err = th.Client.CreateGroup(context.Background(), &model.Group{
++		DisplayName:    "dn_" + model.NewId(),
++		Name:           new("name" + model.NewId()),
++		Source:         model.GroupSourceCustom,
++		AllowReference: true,
++	})
++	require.Error(t, err)
++	CheckBadRequestStatus(t, response)
++}
++
+ func TestPatchGroup(t *testing.T) {
+ 	mainHelper.Parallel(t)
+ 	th := Setup(t)
+@@ -1936,6 +1995,15 @@ func TestGetGroups(t *testing.T) {
+ 		require.Error(t, err)
+ 		CheckNotImplementedStatus(t, response)
+ 		assert.Nil(t, groups)
++
++		opts.Source = ""
++		groups, _, err = th.SystemAdminClient.GetGroups(context.Background(), opts)
++		require.NoError(t, err)
++		for _, g := range groups {
++			assert.Equal(t, model.GroupSourceCustom, g.Source)
++		}
++		assert.Contains(t, groups, group2)
++		assert.NotContains(t, groups, group)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuProfessional))
+@@ -2282,9 +2350,9 @@ func TestGetGroupsByNames(t *testing.T) {
+ 	t.Run("without license", func(t *testing.T) {
+ 		th.App.Srv().SetLicense(nil)
+ 		groups, resp, err := th.SystemAdminClient.GetGroupsByNames(context.Background(), []string{*groupName})
+-		require.Error(t, err)
+-		CheckNotImplementedStatus(t, resp)
+-		assert.Nil(t, groups)
++		require.NoError(t, err)
++		CheckOKStatus(t, resp)
++		assert.Empty(t, groups)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuProfessional))
+diff --git a/server/channels/api4/user_test.go b/server/channels/api4/user_test.go
+index a54fb6d4afed..0f4c21805a31 100644
+--- a/server/channels/api4/user_test.go
++++ b/server/channels/api4/user_test.go
+@@ -1843,7 +1843,7 @@ func TestSearchUsers(t *testing.T) {
+ 	t.Run("Requires ldap license when searching in group", func(t *testing.T) {
+ 		_, resp, err = th.SystemAdminClient.SearchUsers(context.Background(), search)
+ 		require.Error(t, err)
+-		CheckForbiddenStatus(t, resp)
++		CheckNotImplementedStatus(t, resp)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicense("ldap"))
+@@ -4200,7 +4200,7 @@ func TestGetUsersInGroup(t *testing.T) {
+ 	t.Run("Requires ldap license", func(t *testing.T) {
+ 		_, response, err := th.SystemAdminClient.GetUsersInGroup(context.Background(), group.Id, 0, 60, "")
+ 		require.Error(t, err)
+-		CheckForbiddenStatus(t, response)
++		CheckNotImplementedStatus(t, response)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicenseSKU(model.LicenseShortSkuProfessional))
+diff --git a/server/channels/app/notification.go b/server/channels/app/notification.go
+index e9e6f9e204c0..ca33126d1de4 100644
+--- a/server/channels/app/notification.go
++++ b/server/channels/app/notification.go
+@@ -1505,10 +1505,6 @@ func (a *App) allowChannelMentions(rctx request.CTX, post *model.Post, numProfil
+ 
+ // allowGroupMentions returns whether or not the group mentions are allowed for the given post.
+ func (a *App) allowGroupMentions(rctx request.CTX, post *model.Post) bool {
+-	if !model.MinimumProfessionalLicense(a.Srv().License()) {
+-		return false
+-	}
+-
+ 	if ok, _ := a.HasPermissionToChannel(rctx, post.UserId, post.ChannelId, model.PermissionUseGroupMentions); !ok {
+ 		return false
+ 	}
+@@ -1526,7 +1522,9 @@ func (a *App) getGroupsAllowedForReferenceInChannel(channel *model.Channel, team
+ 	groupsMap := make(map[string]*model.Group)
+ 	opts := model.GroupSearchOpts{FilterAllowReference: true, IncludeMemberCount: true}
+ 
+-	if channel.IsGroupConstrained() || (team != nil && team.IsGroupConstrained()) {
++	if !model.MinimumProfessionalLicense(a.Srv().License()) {
++		opts.Source = model.GroupSourceCustom
++	} else if channel.IsGroupConstrained() || (team != nil && team.IsGroupConstrained()) {
+ 		var groups []*model.GroupWithSchemeAdmin
+ 		if channel.IsGroupConstrained() {
+ 			groups, err = a.Srv().Store().Group().GetGroupsByChannel(channel.Id, opts)
+diff --git a/server/channels/app/notification_test.go b/server/channels/app/notification_test.go
+index 118172ccc3b8..f965e0695d29 100644
+--- a/server/channels/app/notification_test.go
++++ b/server/channels/app/notification_test.go
+@@ -60,6 +60,34 @@ func TestSendNotifications(t *testing.T) {
+ 		require.True(t, slices.Contains(mentions, th.BasicUser2.Id), "mentions", mentions)
+ 	})
+ 
++	t.Run("custom group mention works without a license", func(t *testing.T) {
++		th.App.Srv().SetLicense(nil)
++
++		id := model.NewId()
++		group, appErr := th.App.CreateGroup(&model.Group{
++			DisplayName:    "dn_" + id,
++			Name:           new("name" + id),
++			Source:         model.GroupSourceCustom,
++			AllowReference: true,
++		})
++		require.Nil(t, appErr)
++
++		_, appErr = th.App.UpsertGroupMember(group.Id, th.BasicUser2.Id)
++		require.Nil(t, appErr)
++
++		groupMentionPost, _, appErr := th.App.CreatePost(th.Context, &model.Post{
++			UserId:    th.BasicUser.Id,
++			ChannelId: th.BasicChannel.Id,
++			Message:   fmt.Sprintf("hello @%s group", *group.Name),
++			CreateAt:  model.GetMillis() - 10000,
++		}, th.BasicChannel, model.CreatePostFlags{SetOnline: true})
++		require.Nil(t, appErr)
++
++		mentions, err := th.App.SendNotifications(th.Context, groupMentionPost, th.BasicTeam, th.BasicChannel, th.BasicUser, nil, true)
++		require.NoError(t, err)
++		require.Equal(t, []string{th.BasicUser2.Id}, mentions)
++	})
++
+ 	t.Run("license is required for group mention", func(t *testing.T) {
+ 		group := th.CreateGroup(t)
+ 		group.AllowReference = true
+@@ -1807,13 +1835,13 @@ func TestAllowGroupMentions(t *testing.T) {
+ 
+ 	post := &model.Post{ChannelId: th.BasicChannel.Id, UserId: th.BasicUser.Id}
+ 
+-	t.Run("should return false without the correct license sku short name", func(t *testing.T) {
++	t.Run("should return true regardless of the license", func(t *testing.T) {
+ 		tests := map[string]struct {
+ 			license *model.License
+ 			want    bool
+ 		}{
+-			"no license":                        {nil, false},
+-			"license with wrong SKU short name": {getLicWithSkuShortName("foobar"), false},
++			"no license":                        {nil, true},
++			"license with wrong SKU short name": {getLicWithSkuShortName("foobar"), true},
+ 			"'professional' license":            {getLicWithSkuShortName(model.LicenseShortSkuProfessional), true},
+ 			"'enterprise' license":              {getLicWithSkuShortName(model.LicenseShortSkuEnterprise), true},
+ 		}
+@@ -2963,6 +2991,7 @@ func TestInsertGroupMentions(t *testing.T) {
+ func TestGetGroupsAllowedForReferenceInChannel(t *testing.T) {
+ 	mainHelper.Parallel(t)
+ 	th := Setup(t).InitBasic(t)
++	th.App.Srv().SetLicense(getLicWithSkuShortName(model.LicenseShortSkuProfessional))
+ 
+ 	var err *model.AppError
+ 
+@@ -3083,6 +3112,15 @@ func TestGetGroupsAllowedForReferenceInChannel(t *testing.T) {
+ 		require.Equal(t, groupsMap[group3.Id], group3)
+ 		require.Equal(t, groupsMap[customGroup.Id], customGroup)
+ 	})
++
++	t.Run("should return only custom groups without a license", func(t *testing.T) {
++		th.App.Srv().SetLicense(nil)
++
++		groupsMap, nErr := th.App.getGroupsAllowedForReferenceInChannel(constrainedChannel, team)
++		require.NoError(t, nErr)
++		require.Len(t, groupsMap, 1)
++		require.Equal(t, groupsMap[customGroup.Id], customGroup)
++	})
+ }
+ 
+ func TestReplyPostNotificationsWithCRT(t *testing.T) {
+diff --git a/server/channels/store/sqlstore/group_store.go b/server/channels/store/sqlstore/group_store.go
+index ebf692f960f7..02701397734b 100644
+--- a/server/channels/store/sqlstore/group_store.go
++++ b/server/channels/store/sqlstore/group_store.go
+@@ -314,6 +314,10 @@ func (s *SqlGroupStore) GetByNames(names []string, opts model.GroupSearchOpts) (
+ 		query = query.Where("AllowReference = true")
+ 	}
+ 
++	if opts.Source != "" {
++		query = query.Where(sq.Eq{"Source": opts.Source})
++	}
++
+ 	if err := s.GetReplica().SelectBuilder(&groups, query); err != nil {
+ 		return nil, errors.Wrap(err, "failed to find Groups by names")
+ 	}
+diff --git a/server/config/client.go b/server/config/client.go
+index 0c56bf3e164f..9ef6841c187f 100644
+--- a/server/config/client.go
++++ b/server/config/client.go
+@@ -144,7 +144,7 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 	props["IsDefaultMarketplace"] = strconv.FormatBool(*c.PluginSettings.MarketplaceURL == model.PluginSettingsDefaultMarketplaceURL)
+ 	props["ExperimentalSharedChannels"] = "false"
+ 	props["CollapsedThreads"] = *c.ServiceSettings.CollapsedThreads
+-	props["EnableCustomGroups"] = "false"
++	props["EnableCustomGroups"] = strconv.FormatBool(*c.ServiceSettings.EnableCustomGroups)
+ 	props["PostPriority"] = strconv.FormatBool(*c.ServiceSettings.PostPriority)
+ 	props["PostAcknowledgements"] = "true"
+ 	props["ScheduledPosts"] = strconv.FormatBool(*c.ServiceSettings.ScheduledPosts)
+@@ -228,10 +228,6 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 			props["ExperimentalRemoteClusterService"] = strconv.FormatBool(*c.ConnectedWorkspacesSettings.EnableRemoteClusterService)
+ 		}
+ 
+-		if model.MinimumProfessionalLicense(license) {
+-			props["EnableCustomGroups"] = strconv.FormatBool(*c.ServiceSettings.EnableCustomGroups)
+-		}
+-
+ 		if model.MinimumEnterpriseLicense(license) {
+ 			props["MobileEnableBiometrics"] = strconv.FormatBool(*c.NativeAppSettings.MobileEnableBiometrics)
+ 			props["MobilePreventScreenCapture"] = strconv.FormatBool(*c.NativeAppSettings.MobilePreventScreenCapture)
+diff --git a/server/config/client_test.go b/server/config/client_test.go
+index a9f7ed1e4d22..6c922f8cf545 100644
+--- a/server/config/client_test.go
++++ b/server/config/client_test.go
+@@ -229,6 +229,30 @@ func TestGetClientConfig(t *testing.T) {
+ 				Features:     &model.Features{},
+ 				SkuShortName: "other",
+ 			},
++			map[string]string{
++				"EnableCustomGroups": "true",
++			},
++			nil,
++		},
++		{
++			"Custom groups without license",
++			&model.Config{},
++			"",
++			nil,
++			map[string]string{
++				"EnableCustomGroups": "true",
++			},
++			nil,
++		},
++		{
++			"Custom groups disabled without license",
++			&model.Config{
++				ServiceSettings: model.ServiceSettings{
++					EnableCustomGroups: new(false),
++				},
++			},
++			"",
++			nil,
+ 			map[string]string{
+ 				"EnableCustomGroups": "false",
+ 			},
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index 98ee4a8f32ec..cc8d6999a569 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -3143,9 +3143,6 @@ const AdminDefinition: AdminDefinitionType = {
+                             label: defineMessage({id: 'admin.team.customUserGroupsTitle', defaultMessage: 'Enable Custom User Groups: '}),
+                             help_text: defineMessage({id: 'admin.team.customUserGroupsDescription', defaultMessage: 'When true, users with appropriate permissions can create custom user groups and enables at-mentions for those groups.'}),
+                             isDisabled: it.not(it.userHasWritePermissionOnResource(RESOURCE_KEYS.SITE.USERS_AND_TEAMS)),
+-                            isHidden: it.not(it.any(
+-                                it.minLicenseTier(LicenseSkus.Professional),
+-                            )),
+                         },
+                         {
+                             type: 'text',
+diff --git a/webapp/channels/src/components/admin_console/permission_schemes_settings/permissions_tree/permissions_tree.tsx b/webapp/channels/src/components/admin_console/permission_schemes_settings/permissions_tree/permissions_tree.tsx
+index 58438a20a490..906eaee7592f 100644
+--- a/webapp/channels/src/components/admin_console/permission_schemes_settings/permissions_tree/permissions_tree.tsx
++++ b/webapp/channels/src/components/admin_console/permission_schemes_settings/permissions_tree/permissions_tree.tsx
+@@ -283,7 +283,7 @@ export default class PermissionsTree extends React.PureComponent<Props, State> {
+         if (scope === 'team_scope' && this.groups[0].id !== 'teams_team_scope') {
+             this.groups[0].id = 'teams_team_scope';
+         }
+-        if (license?.IsLicensed === 'true' && (license?.LDAPGroups === 'true' || config.EnableCustomGroups === 'true') && !postsGroup.permissions.includes(Permissions.USE_GROUP_MENTIONS)) {
++        if (((license?.IsLicensed === 'true' && license?.LDAPGroups === 'true') || config.EnableCustomGroups === 'true') && !postsGroup.permissions.includes(Permissions.USE_GROUP_MENTIONS)) {
+             postsGroup.permissions.push(Permissions.USE_GROUP_MENTIONS);
+         }
+         postsGroup.permissions.push({
+diff --git a/webapp/channels/src/components/advanced_text_editor/wysiwyg_editor/wysiwyg_suggestion_list.tsx b/webapp/channels/src/components/advanced_text_editor/wysiwyg_editor/wysiwyg_suggestion_list.tsx
+index 8e3474e5921b..e9b7eab2c96e 100644
+--- a/webapp/channels/src/components/advanced_text_editor/wysiwyg_editor/wysiwyg_suggestion_list.tsx
++++ b/webapp/channels/src/components/advanced_text_editor/wysiwyg_editor/wysiwyg_suggestion_list.tsx
+@@ -100,7 +100,7 @@ const WysiwygSuggestionList = ({editor, channelId, rootId, onSubmit}: Props) =>
+     const config = useSelector(getConfig);
+     const defaultAgent = useSelector(getDefaultAgent);
+ 
+-    const useGroupMentions = license?.IsLicensed === 'true' && license?.LDAPGroups === 'true';
++    const useGroupMentions = (license?.IsLicensed === 'true' && license?.LDAPGroups === 'true') || config.EnableCustomGroups === 'true';
+     const autocompleteGroups = useSelector((state: GlobalState) => {
+         if (useGroupMentions && haveIChannelPermission(state, currentTeamId, channelId, Permissions.USE_GROUP_MENTIONS)) {
+             return getAssociatedGroupsForReference(state, currentTeamId, channelId);
+diff --git a/webapp/channels/src/components/team_controller/actions/index.ts b/webapp/channels/src/components/team_controller/actions/index.ts
+index f7591ca6b3b8..faddcb66a69f 100644
+--- a/webapp/channels/src/components/team_controller/actions/index.ts
++++ b/webapp/channels/src/components/team_controller/actions/index.ts
+@@ -37,9 +37,7 @@ export function initializeTeam(team: Team): ActionFuncAsync<Team> {
+ 
+         const license = getLicense(state);
+         const customGroupEnabled = isCustomGroupsEnabled(state);
+-        if (license &&
+-            license.IsLicensed === 'true' &&
+-            (license.LDAPGroups === 'true' || customGroupEnabled)) {
++        if ((license?.IsLicensed === 'true' && license.LDAPGroups === 'true') || customGroupEnabled) {
+             const groupsParams: GetGroupsParams = {
+                 filter_allow_reference: false,
+                 page: 0,
+diff --git a/webapp/channels/src/components/textbox/index.ts b/webapp/channels/src/components/textbox/index.ts
+index d395dff1780a..f4623d69dec3 100644
+--- a/webapp/channels/src/components/textbox/index.ts
++++ b/webapp/channels/src/components/textbox/index.ts
+@@ -13,6 +13,7 @@ import {getDefaultAgent} from 'mattermost-redux/selectors/entities/agents';
+ import {getConfig, getLicense} from 'mattermost-redux/selectors/entities/general';
+ import {getAssociatedGroupsForReference} from 'mattermost-redux/selectors/entities/groups';
+ import {makeGetProfilesForThread} from 'mattermost-redux/selectors/entities/posts';
++import {isCustomGroupsEnabled} from 'mattermost-redux/selectors/entities/preferences';
+ import {haveIChannelPermission} from 'mattermost-redux/selectors/entities/roles';
+ import {getCurrentTeamId} from 'mattermost-redux/selectors/entities/teams';
+ import {getCurrentUserId} from 'mattermost-redux/selectors/entities/users';
+@@ -36,7 +37,7 @@ const makeMapStateToProps = () => {
+     return (state: GlobalState, ownProps: Props) => {
+         const teamId = getCurrentTeamId(state);
+         const license = getLicense(state);
+-        const useGroupMentions = license?.IsLicensed === 'true' && license?.LDAPGroups === 'true' && haveIChannelPermission(state,
++        const useGroupMentions = ((license?.IsLicensed === 'true' && license?.LDAPGroups === 'true') || isCustomGroupsEnabled(state)) && haveIChannelPermission(state,
+             teamId,
+             ownProps.channelId,
+             Permissions.USE_GROUP_MENTIONS,
+diff --git a/webapp/channels/src/packages/mattermost-redux/src/actions/status_profile_polling.ts b/webapp/channels/src/packages/mattermost-redux/src/actions/status_profile_polling.ts
+index b4fb59bdc1ce..a32b9097119c 100644
+--- a/webapp/channels/src/packages/mattermost-redux/src/actions/status_profile_polling.ts
++++ b/webapp/channels/src/packages/mattermost-redux/src/actions/status_profile_polling.ts
+@@ -15,6 +15,7 @@ import {
+ } from 'mattermost-redux/actions/users';
+ import {getCurrentUser, getCurrentUserId, getIsUserStatusesConfigEnabled, getUsers} from 'mattermost-redux/selectors/entities/common';
+ import {getLicense, getUsersStatusAndProfileFetchingPollInterval} from 'mattermost-redux/selectors/entities/general';
++import {isCustomGroupsEnabled} from 'mattermost-redux/selectors/entities/preferences';
+ import {getUserStatuses} from 'mattermost-redux/selectors/entities/users';
+ import type {ActionFunc, ActionFuncAsync, ThunkActionFunc} from 'mattermost-redux/types/actions';
+ import {BackgroundDataLoader} from 'mattermost-redux/utils/data_loader';
+@@ -212,7 +213,7 @@ export function batchFetchStatusesProfilesGroupsFromPosts(postsArrayOrMap: Post[
+         }
+ 
+         if (result.mentionedUsernamesAndGroups.length > 0) {
+-            dispatch(getUsersFromMentionedUsernamesAndGroups(result.mentionedUsernamesAndGroups, getLicense(state).IsLicensed === 'true'));
++            dispatch(getUsersFromMentionedUsernamesAndGroups(result.mentionedUsernamesAndGroups, getLicense(state).IsLicensed === 'true' || isCustomGroupsEnabled(state)));
+         }
+ 
+         return {data: true};
