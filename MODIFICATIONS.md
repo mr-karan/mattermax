@@ -367,3 +367,16 @@ Gates removed in `api4/terms_of_service.go` (create), `config/client.go`
 (`EnableCustomTermsOfService` and `CustomTermsOfServiceReAcceptancePeriod` in
 the limited client config), the mattermost-redux `shouldShowTermsOfService`
 selector, the System Console page and its enable toggle.
+
+### unlock-audit-logging.patch
+
+2026-11-13. Audit logging works without a license: the System Console Audit
+Logging page is visible, and `ExperimentalAuditSettings.AdvancedLoggingJSON`
+targets load alongside basic file auditing. The same `AdvancedLogging` license
+feature also gated the main server log, so `LogSettings` advanced targets are
+no longer stripped when unlicensed (`RemoveUnlicensedLogTargets` deleted): a
+server that already lists advanced targets starts writing to them. Gates
+removed in `app/audit.go`, `app/server.go`, `app/delivery_tracking_config.go`,
+`app/platform/log.go`, `config/logger.go`, `config/client.go`
+(`AuditLoggingActive`) and `admin_definition.tsx`. The audit certificate
+upload stays Cloud-only.
