@@ -127,3 +127,17 @@ and the persistent notification job runs (`jobs/post_persistent_notifications`).
 The web app shows scheduling and its System Console setting without a license
 (`selectors/entities/scheduled_posts.ts`, `admin_definition.tsx`). Tests that
 asserted the license errors now assert the feature works.
+
+### unlock-permission-schemes.patch
+
+2026-11-12. Allow custom permission schemes (team override and channel
+schemes) and channel moderation without a license, so admins can make
+read-only channels and limit `@channel` per channel. Upstream implements both
+in its open-source code and rejects the requests on servers without a
+license. The patch removes those checks from the scheme, team scheme, channel
+scheme and channel moderation endpoints (`api4/scheme.go`, `api4/team.go`,
+`api4/channel.go`). The System Console shows the team override schemes panel
+(`permission_schemes_settings.tsx`) and the channel moderation settings
+(`team_channel_settings/channel/details`), and only loads a channel's LDAP
+groups when group sync is licensed. Access control policies, assigning
+delegated admin roles and editing guest role permissions stay gated.

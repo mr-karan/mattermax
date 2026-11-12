@@ -1,0 +1,333 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Karan Sharma <hello@mrkaran.dev>
+Date: Thu, 12 Nov 2026 22:06:58 +0530
+Subject: [PATCH] feat: permission schemes and channel moderation without a
+ license
+
+Mattermax-Patch: unlock-permission-schemes.patch
+---
+ server/channels/api4/channel.go               | 15 -------------
+ server/channels/api4/channel_test.go          | 21 ++++++++++---------
+ server/channels/api4/scheme.go                | 15 -------------
+ server/channels/api4/scheme_test.go           | 16 +++++++-------
+ server/channels/api4/team.go                  |  5 -----
+ server/channels/api4/team_test.go             |  7 +++----
+ .../permission_schemes_settings.test.tsx      | 12 +++++++++++
+ .../permission_schemes_settings.tsx           |  4 ++--
+ .../channel/details/channel_details.tsx       |  6 ++++--
+ .../channel/details/index.ts                  |  7 ++-----
+ 10 files changed, 43 insertions(+), 65 deletions(-)
+
+diff --git a/server/channels/api4/channel.go b/server/channels/api4/channel.go
+index d014af6daa5e..b01f609858f4 100644
+--- a/server/channels/api4/channel.go
++++ b/server/channels/api4/channel.go
+@@ -3006,11 +3006,6 @@ func updateChannelScheme(c *Context, w http.ResponseWriter, r *http.Request) {
+ 
+ 	model.AddEventParameterToAuditRec(auditRec, "scheme_id", *schemeID)
+ 
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.UpdateChannelScheme", "api.channel.update_channel_scheme.license.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	if !c.App.SessionHasPermissionTo(*c.AppContext.Session(), model.PermissionManageSystem) {
+ 		c.SetPermissionError(model.PermissionManageSystem)
+ 		return
+@@ -3143,11 +3138,6 @@ func channelMemberCountsByGroup(c *Context, w http.ResponseWriter, r *http.Reque
+ }
+ 
+ func getChannelModerations(c *Context, w http.ResponseWriter, r *http.Request) {
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.GetChannelModerations", "api.channel.get_channel_moderations.license.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	c.RequireChannelId()
+ 	if c.Err != nil {
+ 		return
+@@ -3182,11 +3172,6 @@ func getChannelModerations(c *Context, w http.ResponseWriter, r *http.Request) {
+ }
+ 
+ func patchChannelModerations(c *Context, w http.ResponseWriter, r *http.Request) {
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.patchChannelModerations", "api.channel.patch_channel_moderations.license.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	c.RequireChannelId()
+ 	if c.Err != nil {
+ 		return
+diff --git a/server/channels/api4/channel_test.go b/server/channels/api4/channel_test.go
+index b978309f8acc..fd20a8a671bc 100644
+--- a/server/channels/api4/channel_test.go
++++ b/server/channels/api4/channel_test.go
+@@ -6984,11 +6984,10 @@ func TestUpdateChannelScheme(t *testing.T) {
+ 	require.Error(t, err)
+ 	CheckForbiddenStatus(t, resp)
+ 
+-	// Test that a license is required.
++	// Test that a license is not required.
+ 	th.App.Srv().SetLicense(nil)
+-	resp, err = th.SystemAdminClient.UpdateChannelScheme(context.Background(), channel.Id, channelScheme.Id)
+-	require.Error(t, err)
+-	CheckForbiddenStatus(t, resp)
++	_, err = th.SystemAdminClient.UpdateChannelScheme(context.Background(), channel.Id, channelScheme.Id)
++	require.NoError(t, err)
+ 	th.App.Srv().SetLicense(model.NewTestLicense(""))
+ 
+ 	// Test an invalid scheme scope.
+@@ -7151,9 +7150,10 @@ func TestGetChannelModerations(t *testing.T) {
+ 	err := th.App.SetPhase2PermissionsMigrationStatus(true)
+ 	require.NoError(t, err)
+ 
+-	t.Run("Errors without a license", func(t *testing.T) {
+-		_, _, err := th.SystemAdminClient.GetChannelModerations(context.Background(), channel.Id, "")
+-		CheckErrorID(t, err, "api.channel.get_channel_moderations.license.error")
++	t.Run("Works without a license", func(t *testing.T) {
++		moderations, _, err := th.SystemAdminClient.GetChannelModerations(context.Background(), channel.Id, "")
++		require.NoError(t, err)
++		require.Len(t, moderations, 5)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicense())
+@@ -7454,9 +7454,10 @@ func TestPatchChannelModerations(t *testing.T) {
+ 	err := th.App.SetPhase2PermissionsMigrationStatus(true)
+ 	require.NoError(t, err)
+ 
+-	t.Run("Errors without a license", func(t *testing.T) {
+-		_, _, err := th.SystemAdminClient.PatchChannelModerations(context.Background(), channel.Id, emptyPatch)
+-		CheckErrorID(t, err, "api.channel.patch_channel_moderations.license.error")
++	t.Run("Works without a license", func(t *testing.T) {
++		moderations, _, err := th.SystemAdminClient.PatchChannelModerations(context.Background(), channel.Id, emptyPatch)
++		require.NoError(t, err)
++		require.Len(t, moderations, 5)
+ 	})
+ 
+ 	th.App.Srv().SetLicense(model.NewTestLicense())
+diff --git a/server/channels/api4/scheme.go b/server/channels/api4/scheme.go
+index b943fd86269e..0cac14437801 100644
+--- a/server/channels/api4/scheme.go
++++ b/server/channels/api4/scheme.go
+@@ -32,11 +32,6 @@ func createScheme(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	defer c.LogAuditRec(auditRec)
+ 	model.AddEventParameterAuditableToAuditRec(auditRec, "scheme", &scheme)
+ 
+-	if c.App.Channels().License() == nil || (!*c.App.Channels().License().Features.CustomPermissionsSchemes && c.App.Channels().License().SkuShortName != model.LicenseShortSkuProfessional) {
+-		c.Err = model.NewAppError("Api4.CreateScheme", "api.scheme.create_scheme.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	if !c.App.SessionHasPermissionTo(*c.AppContext.Session(), model.PermissionSysconsoleWriteUserManagementPermissions) {
+ 		c.SetPermissionError(model.PermissionSysconsoleWriteUserManagementPermissions)
+ 		return
+@@ -199,11 +194,6 @@ func patchScheme(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	model.AddEventParameterAuditableToAuditRec(auditRec, "scheme_patch", &patch)
+ 	defer c.LogAuditRec(auditRec)
+ 
+-	if c.App.Channels().License() == nil || (!*c.App.Channels().License().Features.CustomPermissionsSchemes && c.App.Channels().License().SkuShortName != model.LicenseShortSkuProfessional) {
+-		c.Err = model.NewAppError("Api4.PatchScheme", "api.scheme.patch_scheme.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	model.AddEventParameterToAuditRec(auditRec, "scheme_id", c.Params.SchemeId)
+ 
+ 	scheme, err := c.App.GetScheme(c.Params.SchemeId)
+@@ -244,11 +234,6 @@ func deleteScheme(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	model.AddEventParameterToAuditRec(auditRec, "scheme_id", c.Params.SchemeId)
+ 	defer c.LogAuditRec(auditRec)
+ 
+-	if c.App.Channels().License() == nil || (!*c.App.Channels().License().Features.CustomPermissionsSchemes && c.App.Channels().License().SkuShortName != model.LicenseShortSkuProfessional) {
+-		c.Err = model.NewAppError("Api4.DeleteScheme", "api.scheme.delete_scheme.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	if !c.App.SessionHasPermissionTo(*c.AppContext.Session(), model.PermissionSysconsoleWriteUserManagementPermissions) {
+ 		c.SetPermissionError(model.PermissionSysconsoleWriteUserManagementPermissions)
+ 		return
+diff --git a/server/channels/api4/scheme_test.go b/server/channels/api4/scheme_test.go
+index 85ead0e3ec6d..0bc6aac8ead1 100644
+--- a/server/channels/api4/scheme_test.go
++++ b/server/channels/api4/scheme_test.go
+@@ -140,7 +140,7 @@ func TestCreateScheme(t *testing.T) {
+ 	require.Error(t, err)
+ 	CheckForbiddenStatus(t, r5)
+ 
+-	// Try and create a scheme without a license.
++	// Create a scheme without a license.
+ 	th.App.Srv().SetLicense(nil)
+ 	scheme6 := &model.Scheme{
+ 		DisplayName: model.NewId(),
+@@ -148,8 +148,9 @@ func TestCreateScheme(t *testing.T) {
+ 		Description: model.NewId(),
+ 		Scope:       model.SchemeScopeTeam,
+ 	}
+-	_, r6, _ := th.SystemAdminClient.CreateScheme(context.Background(), scheme6)
+-	CheckNotImplementedStatus(t, r6)
++	_, r6, err := th.SystemAdminClient.CreateScheme(context.Background(), scheme6)
++	require.NoError(t, err)
++	CheckCreatedStatus(t, r6)
+ 
+ 	// Create scheme with a Professional SKU license but no explicit 'custom_permissions_schemes' license feature.
+ 	lic := &model.License{
+@@ -679,8 +680,9 @@ func TestPatchScheme(t *testing.T) {
+ 
+ 	// Test without license.
+ 	th.App.Srv().SetLicense(nil)
+-	_, r11, _ := th.SystemAdminClient.PatchScheme(context.Background(), s6.Id, schemePatch)
+-	CheckNotImplementedStatus(t, r11)
++	_, r11, err := th.SystemAdminClient.PatchScheme(context.Background(), s6.Id, schemePatch)
++	require.NoError(t, err)
++	CheckOKStatus(t, r11)
+ 
+ 	// Patch scheme with a Professional SKU license but no explicit 'custom_permissions_schemes' license feature.
+ 	lic := &model.License{
+@@ -897,8 +899,8 @@ func TestDeleteScheme(t *testing.T) {
+ 		// Test without license.
+ 		th.App.Srv().SetLicense(nil)
+ 		r5, err := th.SystemAdminClient.DeleteScheme(context.Background(), s1.Id)
+-		require.Error(t, err)
+-		CheckNotImplementedStatus(t, r5)
++		require.NoError(t, err)
++		CheckOKStatus(t, r5)
+ 
+ 		// Delete scheme with a Professional SKU license but no explicit 'custom_permissions_schemes' license feature.
+ 		lic := &model.License{
+diff --git a/server/channels/api4/team.go b/server/channels/api4/team.go
+index 021c3c6dab66..9344fb4c0b45 100644
+--- a/server/channels/api4/team.go
++++ b/server/channels/api4/team.go
+@@ -2079,11 +2079,6 @@ func updateTeamScheme(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	model.AddEventParameterAuditableToAuditRec(auditRec, "scheme_id_patch", &p)
+ 	defer c.LogAuditRec(auditRec)
+ 
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.UpdateTeamScheme", "api.team.update_team_scheme.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	if !c.App.SessionHasPermissionTo(*c.AppContext.Session(), model.PermissionSysconsoleWriteUserManagementPermissions) {
+ 		c.SetPermissionError(model.PermissionSysconsoleWriteUserManagementPermissions)
+ 		return
+diff --git a/server/channels/api4/team_test.go b/server/channels/api4/team_test.go
+index 10610eaaecbd..57e2eab73609 100644
+--- a/server/channels/api4/team_test.go
++++ b/server/channels/api4/team_test.go
+@@ -5010,11 +5010,10 @@ func TestUpdateTeamScheme(t *testing.T) {
+ 	require.Error(t, err)
+ 	CheckForbiddenStatus(t, resp)
+ 
+-	// Test that a license is required.
++	// Test that a license is not required.
+ 	th.App.Srv().SetLicense(nil)
+-	resp, err = th.SystemAdminClient.UpdateTeamScheme(context.Background(), team.Id, teamScheme.Id)
+-	require.Error(t, err)
+-	CheckNotImplementedStatus(t, resp)
++	_, err = th.SystemAdminClient.UpdateTeamScheme(context.Background(), team.Id, teamScheme.Id)
++	require.NoError(t, err)
+ 	th.App.Srv().SetLicense(model.NewTestLicense(""))
+ 
+ 	// Test an invalid scheme scope.
+diff --git a/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.test.tsx b/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.test.tsx
+index d7881dc9c8f2..151e66987ea2 100644
+--- a/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.test.tsx
++++ b/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.test.tsx
+@@ -72,6 +72,18 @@ describe('components/admin_console/permission_schemes_settings/permission_scheme
+         expect(container).toMatchSnapshot();
+     });
+ 
++    test('should show team override schemes without a license', async () => {
++        const {container} = renderWithContext(
++            <PermissionSchemesSettings
++                {...defaultProps}
++                license={{CustomPermissionsSchemes: 'false', SkuShortName: ''}}
++            />,
++        );
++        await waitFor(() => {
++            expect(container.querySelector('#team-override-schemes')).toBeInTheDocument();
++        });
++    });
++
+     test('should show migration in-progress view', async () => {
+         const loadSchemes = jest.fn(() =>
+             Promise.resolve({data: [], error: {status_code: 501}}),
+diff --git a/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.tsx b/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.tsx
+index 4aae57563b9d..82cfb37f98b7 100644
+--- a/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.tsx
++++ b/webapp/channels/src/components/admin_console/permission_schemes_settings/permission_schemes_settings.tsx
+@@ -18,7 +18,7 @@ import AdminHeader from 'components/widgets/admin_console/admin_header';
+ import AdminPanelWithLink from 'components/widgets/admin_console/admin_panel_with_link';
+ import LoadingWrapper from 'components/widgets/loading/loading_wrapper';
+ 
+-import {DocLinks, LicenseSkus} from 'utils/constants';
++import {DocLinks} from 'utils/constants';
+ 
+ import PermissionsSchemeSummary from './permissions_scheme_summary';
+ 
+@@ -174,7 +174,7 @@ export default class PermissionSchemesSettings extends React.PureComponent<Props
+                 match={this.props.match}
+             />
+         ));
+-        const hasCustomSchemes = this.props.license.CustomPermissionsSchemes === 'true' || this.props.license.SkuShortName === LicenseSkus.Professional;
++        const hasCustomSchemes = true;
+         const teamOverrideView = this.teamOverrideSchemesMigrationView();
+ 
+         if (hasCustomSchemes) {
+diff --git a/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/channel_details.tsx b/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/channel_details.tsx
+index 552688140820..611123eff484 100644
+--- a/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/channel_details.tsx
++++ b/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/channel_details.tsx
+@@ -235,9 +235,11 @@ export default class ChannelDetails extends React.PureComponent<ChannelDetailsPr
+     componentDidMount() {
+         const {channelID, channel, actions} = this.props;
+         if (channelID) {
+-            if (this.props.channelModerationEnabled) {
++            if (this.props.channelGroupsEnabled) {
+                 actions.getGroups(channelID).
+                     then(() => this.setState({groups: this.props.groups}));
++            }
++            if (this.props.channelModerationEnabled) {
+                 actions.getChannelModerations(channelID).then(() => this.restrictChannelMentions());
+             }
+             actions.getChannel(channelID);
+@@ -585,7 +587,7 @@ export default class ChannelDetails extends React.PureComponent<ChannelDetailsPr
+ 
+         if (!(resultWithError && 'error' in resultWithError) && !('error' in patchResult)) {
+             const actionsToAwait: any[] = [];
+-            if (this.props.channelModerationEnabled) {
++            if (this.props.channelGroupsEnabled) {
+                 actionsToAwait.push(actions.getGroups(channelID));
+             }
+             if (isPrivacyChanging) {
+diff --git a/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/index.ts b/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/index.ts
+index d6f6f7cfe5e6..4e1e1c5421eb 100644
+--- a/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/index.ts
++++ b/webapp/channels/src/components/admin_console/team_channel_settings/channel/details/index.ts
+@@ -39,7 +39,7 @@ import {getTeam} from 'mattermost-redux/selectors/entities/teams';
+ import {setNavigationBlocked} from 'actions/admin_actions';
+ import {isChannelAccessControlEnabled} from 'selectors/general';
+ 
+-import {isMinimumEnterpriseAdvancedLicense, isMinimumEnterpriseLicense, isMinimumProfessionalLicense} from 'utils/license_utils';
++import {isMinimumEnterpriseAdvancedLicense, isMinimumEnterpriseLicense} from 'utils/license_utils';
+ 
+ import type {GlobalState} from 'types/store';
+ 
+@@ -59,9 +59,6 @@ function mapStateToProps(state: GlobalState, ownProps: OwnProps) {
+ 
+     const isLicensed = license?.IsLicensed === 'true';
+ 
+-    // Channel Moderation is only available for Professional and above
+-    const channelModerationEnabled = isLicensed && isMinimumProfessionalLicense(license);
+-
+     // Channel Groups is only available for Enterprise and above
+     const channelGroupsEnabled = isLicensed && isMinimumEnterpriseLicense(license);
+ 
+@@ -89,7 +86,7 @@ function mapStateToProps(state: GlobalState, ownProps: OwnProps) {
+         channelPermissions,
+         teamScheme,
+         guestAccountsEnabled,
+-        channelModerationEnabled,
++        channelModerationEnabled: true,
+         channelGroupsEnabled,
+         abacSupported,
+     };

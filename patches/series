@@ -10,3 +10,4 @@ fix-mfa-switch-title.patch
 no-enterprise-imports.patch
 id-loaded-push-notifications.patch
 unlock-scheduled-posts.patch
+unlock-permission-schemes.patch
