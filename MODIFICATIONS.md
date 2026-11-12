@@ -321,3 +321,18 @@ logged_in, the websocket reconnect, profile_popover, user_settings/general,
 system_user_detail, and the Attribute Management pages; the unlicensed User
 Attributes discovery page and its string are gone. Still gated: Board
 Attributes, Classification Markings, and LDAP attribute sync.
+
+### unlock-mobile-security.patch
+
+2026-11-13. Mobile biometric authentication, screen capture prevention,
+jailbreak/root protection and the mobile watermark work without a license.
+`config/client.go` sends `MobileEnableBiometrics`,
+`MobilePreventScreenCapture`, `MobileJailbreakProtection` and
+`ExperimentalEnableWatermark` in both client configs, and the System Console
+shows the Mobile Security page and the Enable Mobile Watermark setting without
+a license. The stock Mattermost mobile app reads these four from the client
+config without checking the license. `MobileEnableSecureFilePreview` and
+`MobileAllowPdfLinkNavigation` stay gated at Enterprise Advanced, because the
+stock app also checks that license tier itself
+(`app/queries/servers/security.ts`), so unlocking them on the server would
+show settings that do nothing. Intune MAM stays gated.

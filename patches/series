@@ -25,3 +25,4 @@ slowmode.patch
 thread-auto-archive.patch
 unlock-content-flagging.patch
 unlock-custom-profile-attributes.patch
+unlock-mobile-security.patch
