@@ -308,3 +308,16 @@ page in `admin_definition.tsx`. The `ContentFlagging` feature flag already
 defaults on upstream; admins still enable the feature in
 `ContentFlaggingSettings.EnableContentFlagging`. Picking LDAP groups as
 reviewers stays behind the LDAP groups license.
+
+### unlock-custom-profile-attributes.patch
+
+2026-11-13. Admin-defined custom profile attributes work without a license:
+admins create, edit and delete fields under System Console > System Attributes
+> Attribute Management, users fill them in Profile settings, and values show
+in the profile popover and System Console user detail. Server gates removed:
+the properties `LicenseCheckHook` registration in `app/server.go` and the
+inline Enterprise check in api4 `getCPAGroup`. Webapp gates removed in
+logged_in, the websocket reconnect, profile_popover, user_settings/general,
+system_user_detail, and the Attribute Management pages; the unlicensed User
+Attributes discovery page and its string are gone. Still gated: Board
+Attributes, Classification Markings, and LDAP attribute sync.
