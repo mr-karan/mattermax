@@ -222,3 +222,15 @@ Guests panels read-only (`permission_system_scheme_settings.tsx`,
 `permission_team_scheme_settings.tsx`). The guest Group Mentions permission is
 offered when custom groups are enabled (`guest_permissions_tree`), as it is for
 members. Role permission checks are unchanged.
+
+### command-palette.patch
+
+2026-11-13. Turn the Ctrl/Cmd+K channel switcher into a command palette when
+the query starts with ">": set your status (online, away, do not disturb for a
+chosen time, offline), set or clear a custom status, open Settings, Profile,
+Threads, Drafts or the System Console (for users with console access), and run
+any slash command available in the current channel through the existing
+autocomplete. Without ">", the switcher works as before and shows a hint row.
+The commands live in new files under
+`components/quick_switch_modal/command_palette/`; `quick_switch_modal.tsx`
+gains the provider, the hint and Enter handling. No server change.

@@ -17,3 +17,4 @@ unlock-guest-accounts.patch
 unlock-shared-channels.patch
 unlock-theme-management.patch
 unlock-guest-permissions.patch
+command-palette.patch
