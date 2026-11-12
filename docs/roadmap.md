@@ -15,12 +15,12 @@ maintainer can accept or drop one without the others.
 
 | Feature | Slack or Discord equivalent | Issue |
 | --- | --- | --- |
-| Scheduled messages and acknowledgements | Schedule send, ack on urgent posts | [#1](https://github.com/mr-karan/mattermax/issues/1) |
-| Custom user groups | `@group` mentions, Discord role pings | [#2](https://github.com/mr-karan/mattermax/issues/2) |
-| Permission schemes and channel moderation | Read-only channels, per-channel overrides | [#3](https://github.com/mr-karan/mattermax/issues/3) |
-| Guest accounts and magic links | Slack guests | [#4](https://github.com/mr-karan/mattermax/issues/4) |
-| Shared channels between servers | Slack Connect | [#5](https://github.com/mr-karan/mattermax/issues/5) |
-| Announcement banners | Workspace-wide notices | [#6](https://github.com/mr-karan/mattermax/issues/6) |
+| Scheduled messages and acknowledgements | Schedule send, ack on urgent posts | [opnlabs#1](https://github.com/opnlabs/mattermax/issues/1) |
+| Custom user groups | `@group` mentions, Discord role pings | [opnlabs#2](https://github.com/opnlabs/mattermax/issues/2) |
+| Permission schemes and channel moderation | Read-only channels, per-channel overrides | [opnlabs#3](https://github.com/opnlabs/mattermax/issues/3) |
+| Guest accounts and magic links | Slack guests | [opnlabs#4](https://github.com/opnlabs/mattermax/issues/4) |
+| Shared channels between servers | Slack Connect | [opnlabs#5](https://github.com/opnlabs/mattermax/issues/5) |
+| Announcement banners | Workspace-wide notices | [opnlabs#6](https://github.com/opnlabs/mattermax/issues/6) |
 
 ## Tier 2: write paid features from scratch
 
