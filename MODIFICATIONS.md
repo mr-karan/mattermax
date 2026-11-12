@@ -141,3 +141,13 @@ scheme and channel moderation endpoints (`api4/scheme.go`, `api4/team.go`,
 (`team_channel_settings/channel/details`), and only loads a channel's LDAP
 groups when group sync is licensed. Access control policies, assigning
 delegated admin roles and editing guest role permissions stay gated.
+
+### unlock-announcement-banner.patch
+
+2026-11-12. Allow the system announcement banner without a license. Upstream
+sends the banner settings (`AnnouncementSettings`) to clients only with an
+Announcement license, so the banner never showed. The client config now sends
+the configured values (`server/config/client.go`), and the System Console page
+is gated only by its permission (`admin_definition.tsx`). Its feature
+discovery twin stays in the definition and is removed at runtime by
+`remove-upsell-pages.patch`.
