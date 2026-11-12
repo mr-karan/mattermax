@@ -183,3 +183,19 @@ inviting (hidden before because Mattermax builds are not "enterprise ready"),
 inviting guests to a channel, and "Demote to guest" without a license
 (`admin_definition.tsx`, `invitation_modal`, `channel_invite_modal`,
 `system_users_list_actions`). Custom guest role permissions stay gated.
+
+### unlock-shared-channels.patch
+
+2026-11-12. Allow shared channels and connected workspaces without a license,
+so two independent servers can connect and sync a shared channel. Upstream's
+sync services are open source and only start, and accept requests from the
+other server, with a license. The patch removes those checks: the services
+start when `ConnectedWorkspacesSettings.EnableRemoteClusterService` or
+`EnableSharedChannels` is on (`app/server.go`), remote cluster token auth
+requires the remote cluster service instead of a license (`web/context.go`,
+`web/handlers.go`), the client config sends both settings
+(`server/config/client.go`), and the System Console shows the Connected
+Workspaces pages (`admin_definition.tsx`). The test helpers no longer add a
+license when these settings are on, so the shared channel tests run without
+one. DMs with remote users stay behind upstream's `EnableSharedChannelsDMs`
+feature flag.
