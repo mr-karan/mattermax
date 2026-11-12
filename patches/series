@@ -27,3 +27,4 @@ unlock-content-flagging.patch
 unlock-custom-profile-attributes.patch
 unlock-mobile-security.patch
 unlock-enforce-mfa.patch
+unlock-lock-profile-fields.patch

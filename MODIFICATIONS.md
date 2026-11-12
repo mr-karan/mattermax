@@ -348,3 +348,13 @@ setting, and the webapp MFA-required redirect checks (`utils/route.tsx`,
 logged_in, team_controller, mfa_controller, the MFA settings section). TOTP
 lives in AGPL `server/platform/shared/mfa`. A licensed server whose license
 lacks the MFA feature now also enforces MFA when the config asks for it.
+
+### unlock-lock-profile-fields.patch
+
+2026-11-13. `TeamSettings.LockProfileFieldsForEmailUsers` works without a
+license: email/password users cannot change locked name, username, nickname,
+position or profile image, and invites can preset member profiles. Gates
+removed: `CheckLockedProfileFields` and `IsProfileImageLockedForUser` in
+`app/user.go`, the invite profile check in `app/team.go`, the Enterprise-only
+client config prop in `config/client.go` (which empties and removes that
+license block), and the hidden System Console setting.
