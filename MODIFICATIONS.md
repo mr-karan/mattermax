@@ -112,3 +112,90 @@ fetched message with the same code as the "full" setting. The System Console
 offers the option without a license (`admin_definition.tsx`). Written from
 Mattermost's open-source notification code, without consulting Mattermost's
 enterprise code.
+
+### unlock-scheduled-posts.patch
+
+2026-11-12. Allow scheduled messages (including recurring ones), message
+acknowledgements and persistent notifications without a license. Upstream
+implements all three in its open-source code and disables them on servers
+without a Professional license. The patch removes those checks: the client
+config sends `ScheduledPosts` and `PostAcknowledgements` (`server/config/client.go`),
+the scheduled post API and job run (`api4/scheduled_post.go`,
+`app/scheduled_post_job.go`), the acknowledge endpoints and post priority
+checks accept the requests (`api4/post.go`, `app/post_permission_utils.go`),
+and the persistent notification job runs (`jobs/post_persistent_notifications`).
+The web app shows scheduling and its System Console setting without a license
+(`selectors/entities/scheduled_posts.ts`, `admin_definition.tsx`). Tests that
+asserted the license errors now assert the feature works.
+
+### unlock-permission-schemes.patch
+
+2026-11-12. Allow custom permission schemes (team override and channel
+schemes) and channel moderation without a license, so admins can make
+read-only channels and limit `@channel` per channel. Upstream implements both
+in its open-source code and rejects the requests on servers without a
+license. The patch removes those checks from the scheme, team scheme, channel
+scheme and channel moderation endpoints (`api4/scheme.go`, `api4/team.go`,
+`api4/channel.go`). The System Console shows the team override schemes panel
+(`permission_schemes_settings.tsx`) and the channel moderation settings
+(`team_channel_settings/channel/details`), and only loads a channel's LDAP
+groups when group sync is licensed. Access control policies, assigning
+delegated admin roles and editing guest role permissions stay gated.
+
+### unlock-announcement-banner.patch
+
+2026-11-12. Allow the system announcement banner without a license. Upstream
+sends the banner settings (`AnnouncementSettings`) to clients only with an
+Announcement license, so the banner never showed. The client config now sends
+the configured values (`server/config/client.go`), and the System Console page
+is gated only by its permission (`admin_definition.tsx`). Its feature
+discovery twin stays in the definition and is removed at runtime by
+`remove-upsell-pages.patch`.
+
+### unlock-custom-groups.patch
+
+2026-11-12. Allow custom user groups without a license: creating and managing
+groups, `@group` mentions with autocomplete, adding groups to channels, and
+the `ServiceSettings.EnableCustomGroups` System Console setting. Upstream
+implements custom groups in its open-source code and rejects them on servers
+without a license. The patch removes those checks from the client config
+(`server/config/client.go`), the custom group endpoints (`api4/group.go`), the
+member counts used by the mention confirmation (`api4/channel.go`) and group
+mentions (`app/notification.go`). The web app loads, offers and highlights
+custom groups without a license (`team_controller/actions`,
+`status_profile_polling.ts`, `textbox`, `wysiwyg_suggestion_list.tsx`,
+`permissions_tree.tsx`, `admin_definition.tsx`). LDAP and plugin groups stay
+gated: without a license their endpoints return 501, and group listings,
+lookups by name and mentions see only custom groups, for which
+`GroupStore.GetByNames` now honours the requested source.
+
+### unlock-guest-accounts.patch
+
+2026-11-12. Allow guest accounts and guest magic links without a license:
+inviting guests to channels by email or magic link, guest sign-up with an
+invitation token, guest login, demoting a member to guest, and passwordless
+guest sign-in. Upstream implements guests in its open-source code and rejects
+them on servers without a license. Its login type endpoint even dereferenced
+the missing license and crashed. The patch removes those checks
+(`api4/user.go`, `api4/team.go`); the `GuestAccountsSettings` switches still
+apply. The web app shows the Guest Access page, the guest option when
+inviting (hidden before because Mattermax builds are not "enterprise ready"),
+inviting guests to a channel, and "Demote to guest" without a license
+(`admin_definition.tsx`, `invitation_modal`, `channel_invite_modal`,
+`system_users_list_actions`). Custom guest role permissions stay gated.
+
+### unlock-shared-channels.patch
+
+2026-11-12. Allow shared channels and connected workspaces without a license,
+so two independent servers can connect and sync a shared channel. Upstream's
+sync services are open source and only start, and accept requests from the
+other server, with a license. The patch removes those checks: the services
+start when `ConnectedWorkspacesSettings.EnableRemoteClusterService` or
+`EnableSharedChannels` is on (`app/server.go`), remote cluster token auth
+requires the remote cluster service instead of a license (`web/context.go`,
+`web/handlers.go`), the client config sends both settings
+(`server/config/client.go`), and the System Console shows the Connected
+Workspaces pages (`admin_definition.tsx`). The test helpers no longer add a
+license when these settings are on, so the shared channel tests run without
+one. DMs with remote users stay behind upstream's `EnableSharedChannelsDMs`
+feature flag.

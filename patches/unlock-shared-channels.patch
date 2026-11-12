@@ -1,0 +1,307 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Karan Sharma <hello@mrkaran.dev>
+Date: Thu, 12 Nov 2026 22:28:24 +0530
+Subject: [PATCH] feat: shared channels and connected workspaces without a
+ license
+
+Mattermax-Patch: unlock-shared-channels.patch
+---
+ server/channels/api4/apitestlib.go            |  7 ++--
+ server/channels/api4/remote_cluster_test.go   | 36 +++++++++++++++++++
+ server/channels/app/helper_test.go            |  7 ++--
+ server/channels/app/server.go                 | 21 ++---------
+ .../channels/app/slashcommands/helper_test.go |  7 ++--
+ server/channels/web/context.go                |  2 +-
+ server/channels/web/handlers.go               |  2 +-
+ server/config/client.go                       |  8 ++---
+ server/config/client_test.go                  | 20 +++++++++--
+ .../admin_console/admin_definition.tsx        |  2 --
+ 10 files changed, 66 insertions(+), 46 deletions(-)
+
+diff --git a/server/channels/api4/apitestlib.go b/server/channels/api4/apitestlib.go
+index 27b9c1cc19ed..6fa7b8c35e3b 100644
+--- a/server/channels/api4/apitestlib.go
++++ b/server/channels/api4/apitestlib.go
+@@ -189,7 +189,7 @@ func setupTestHelper(tb testing.TB, dbStore store.Store, sqlSettings *model.SqlS
+ 		th.App.SetSearchEngine(searchEngine)
+ 	}
+ 
+-	th.App.Srv().SetLicense(getLicense(enterprise, memoryConfig))
++	th.App.Srv().SetLicense(getLicense(enterprise))
+ 
+ 	th.App.UpdateConfig(func(cfg *model.Config) {
+ 		*cfg.TeamSettings.MaxUsersPerTeam = 50
+@@ -254,10 +254,7 @@ func setupTestHelper(tb testing.TB, dbStore store.Store, sqlSettings *model.SqlS
+ 	return th
+ }
+ 
+-func getLicense(enterprise bool, cfg *model.Config) *model.License {
+-	if *cfg.ConnectedWorkspacesSettings.EnableRemoteClusterService || *cfg.ConnectedWorkspacesSettings.EnableSharedChannels {
+-		return model.NewTestLicenseSKU(model.LicenseShortSkuProfessional)
+-	}
++func getLicense(enterprise bool) *model.License {
+ 	if enterprise {
+ 		return model.NewTestLicense()
+ 	}
+diff --git a/server/channels/api4/remote_cluster_test.go b/server/channels/api4/remote_cluster_test.go
+index a5deb9ddab54..cbcb967968dd 100644
+--- a/server/channels/api4/remote_cluster_test.go
++++ b/server/channels/api4/remote_cluster_test.go
+@@ -6,6 +6,8 @@ package api4
+ import (
+ 	"context"
+ 	"encoding/base64"
++	"encoding/json"
++	"net/http"
+ 	"testing"
+ 
+ 	"github.com/mattermost/mattermost/server/public/model"
+@@ -601,6 +603,40 @@ func TestGetRemoteCluster(t *testing.T) {
+ 	})
+ }
+ 
++func TestRemoteClusterPingWithoutLicense(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := setupForSharedChannels(t).InitBasic(t)
++	require.Nil(t, th.App.Srv().License())
++
++	rc, appErr := th.App.AddRemoteCluster(&model.RemoteCluster{
++		Name:        "remotecluster",
++		SiteURL:     "http://example.com",
++		Token:       model.NewId(),
++		RemoteToken: model.NewId(),
++		CreatorId:   th.SystemAdminUser.Id,
++	})
++	require.Nil(t, appErr)
++
++	ping, err := json.Marshal(model.RemoteClusterPing{SentAt: model.GetMillis()})
++	require.NoError(t, err)
++	frame, err := json.Marshal(model.RemoteClusterFrame{RemoteId: rc.RemoteId, Msg: model.NewRemoteClusterMsg("ping", ping)})
++	require.NoError(t, err)
++
++	client := th.CreateClient()
++	sendPing := func(token string) *http.Response {
++		resp, _ := client.DoAPIRequestWithHeaders(context.Background(), http.MethodPost, "/remotecluster/ping", string(frame), map[string]string{
++			model.HeaderRemoteclusterToken: token,
++			model.HeaderRemoteclusterId:    rc.RemoteId,
++		})
++		require.NotNil(t, resp)
++		defer resp.Body.Close()
++		return resp
++	}
++
++	require.Equal(t, http.StatusOK, sendPing(rc.Token).StatusCode)
++	require.Equal(t, http.StatusUnauthorized, sendPing(model.NewId()).StatusCode)
++}
++
+ func TestGetRemoteClusterWithManagerRoles(t *testing.T) {
+ 	mainHelper.Parallel(t)
+ 	th := setupForSharedChannels(t).InitBasic(t)
+diff --git a/server/channels/app/helper_test.go b/server/channels/app/helper_test.go
+index 681603340317..c5c0bb33e291 100644
+--- a/server/channels/app/helper_test.go
++++ b/server/channels/app/helper_test.go
+@@ -144,7 +144,7 @@ func setupTestHelper(dbStore store.Store, sqlStore *sqlstore.SqlStore, sqlSettin
+ 		tempWorkspace:     tempWorkspace,
+ 	}
+ 
+-	th.App.Srv().SetLicense(getLicense(enterprise, memoryConfig))
++	th.App.Srv().SetLicense(getLicense(enterprise))
+ 
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.TeamSettings.MaxUsersPerTeam = 50 })
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.RateLimitSettings.Enable = false })
+@@ -187,10 +187,7 @@ func setupTestHelper(dbStore store.Store, sqlStore *sqlstore.SqlStore, sqlSettin
+ 	return th
+ }
+ 
+-func getLicense(enterprise bool, cfg *model.Config) *model.License {
+-	if *cfg.ConnectedWorkspacesSettings.EnableRemoteClusterService || *cfg.ConnectedWorkspacesSettings.EnableSharedChannels {
+-		return model.NewTestLicenseSKU(model.LicenseShortSkuProfessional)
+-	}
++func getLicense(enterprise bool) *model.License {
+ 	if enterprise {
+ 		return model.NewTestLicense()
+ 	}
+diff --git a/server/channels/app/server.go b/server/channels/app/server.go
+index 83fe3590f87b..74bd6abd64be 100644
+--- a/server/channels/app/server.go
++++ b/server/channels/app/server.go
+@@ -707,20 +707,9 @@ func (s *Server) Channels() *Channels {
+ 	return s.ch
+ }
+ 
+-func (s *Server) startInterClusterServices(license *model.License) error {
+-	if license == nil {
+-		mlog.Debug("No license provided; Remote Cluster services disabled")
+-		return nil
+-	}
+-
++func (s *Server) startInterClusterServices() error {
+ 	// Remote Cluster service
+ 
+-	// License check (assume enabled if shared channels enabled)
+-	if !license.HasRemoteClusterService() && !license.HasSharedChannels() {
+-		mlog.Debug("License does not have Remote Cluster services enabled")
+-		return nil
+-	}
+-
+ 	// Config check
+ 	if !*s.platform.Config().ConnectedWorkspacesSettings.EnableRemoteClusterService && !*s.platform.Config().ConnectedWorkspacesSettings.EnableSharedChannels {
+ 		mlog.Debug("Remote Cluster Service disabled via config")
+@@ -744,12 +733,6 @@ func (s *Server) startInterClusterServices(license *model.License) error {
+ 
+ 	// Shared Channels service (depends on remote cluster service)
+ 
+-	// License check
+-	if !license.HasSharedChannels() {
+-		mlog.Debug("License does not have shared channels enabled")
+-		return nil
+-	}
+-
+ 	// Config check
+ 	if !*s.platform.Config().ConnectedWorkspacesSettings.EnableSharedChannels {
+ 		mlog.Debug("Shared Channels Service disabled via config")
+@@ -980,7 +963,7 @@ func stripPort(hostport string) string {
+ func (s *Server) Start() error {
+ 	// Start inter-cluster services first so shared channels APIs are
+ 	// available when plugins activate during channels startup.
+-	if err := s.startInterClusterServices(s.License()); err != nil {
++	if err := s.startInterClusterServices(); err != nil {
+ 		mlog.Error("Error starting inter-cluster services", mlog.Err(err))
+ 	}
+ 
+diff --git a/server/channels/app/slashcommands/helper_test.go b/server/channels/app/slashcommands/helper_test.go
+index f9accaaaaf72..bac6c69454b1 100644
+--- a/server/channels/app/slashcommands/helper_test.go
++++ b/server/channels/app/slashcommands/helper_test.go
+@@ -111,7 +111,7 @@ func setupTestHelper(dbStore store.Store, enterprise bool, includeCacheLayer boo
+ 		startErr = th.App.Srv().Jobs.StartSchedulers()
+ 		require.NoError(tb, startErr)
+ 	} else {
+-		th.App.Srv().SetLicense(getLicense(false, memoryConfig))
++		th.App.Srv().SetLicense(getLicense(false))
+ 	}
+ 
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.TeamSettings.MaxUsersPerTeam = 50 })
+@@ -162,10 +162,7 @@ func (th *TestHelper) ShutdownApp() {
+ 	}
+ }
+ 
+-func getLicense(enterprise bool, cfg *model.Config) *model.License {
+-	if *cfg.ConnectedWorkspacesSettings.EnableRemoteClusterService || *cfg.ConnectedWorkspacesSettings.EnableSharedChannels {
+-		return model.NewTestLicenseSKU(model.LicenseShortSkuProfessional)
+-	}
++func getLicense(enterprise bool) *model.License {
+ 	if enterprise {
+ 		return model.NewTestLicense()
+ 	}
+diff --git a/server/channels/web/context.go b/server/channels/web/context.go
+index 876f356e2518..9844fd7d5743 100644
+--- a/server/channels/web/context.go
++++ b/server/channels/web/context.go
+@@ -157,7 +157,7 @@ func (c *Context) CloudKeyRequired() {
+ }
+ 
+ func (c *Context) RemoteClusterTokenRequired() {
+-	if license := c.App.Channels().License(); license == nil || !license.HasRemoteClusterService() || c.AppContext.Session().Props[model.SessionPropType] != model.SessionTypeRemoteclusterToken {
++	if c.AppContext.Session().Props[model.SessionPropType] != model.SessionTypeRemoteclusterToken {
+ 		c.Err = model.NewAppError("", "api.context.session_expired.app_error", nil, "TokenRequired", http.StatusUnauthorized)
+ 		return
+ 	}
+diff --git a/server/channels/web/handlers.go b/server/channels/web/handlers.go
+index dc0a02774c11..fccfaa55488f 100644
+--- a/server/channels/web/handlers.go
++++ b/server/channels/web/handlers.go
+@@ -311,7 +311,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		} else {
+ 			c.AppContext = c.AppContext.WithSession(session)
+ 		}
+-	} else if token != "" && c.App.Channels().License() != nil && c.App.Channels().License().HasRemoteClusterService() && tokenLocation == app.TokenLocationRemoteClusterHeader {
++	} else if token != "" && c.App.Srv().GetRemoteClusterService() != nil && tokenLocation == app.TokenLocationRemoteClusterHeader {
+ 		// Get the remote cluster
+ 		if remoteId := c.GetRemoteID(r); remoteId == "" {
+ 			c.Logger.Warn("Missing remote cluster id") //
+diff --git a/server/config/client.go b/server/config/client.go
+index 9ef6841c187f..e57259413a61 100644
+--- a/server/config/client.go
++++ b/server/config/client.go
+@@ -142,7 +142,8 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 	props["CustomUrlSchemes"] = strings.Join(c.DisplaySettings.CustomURLSchemes, ",")
+ 	props["MaxMarkdownNodes"] = strconv.FormatInt(int64(*c.DisplaySettings.MaxMarkdownNodes), 10)
+ 	props["IsDefaultMarketplace"] = strconv.FormatBool(*c.PluginSettings.MarketplaceURL == model.PluginSettingsDefaultMarketplaceURL)
+-	props["ExperimentalSharedChannels"] = "false"
++	props["ExperimentalSharedChannels"] = strconv.FormatBool(*c.ConnectedWorkspacesSettings.EnableSharedChannels)
++	props["ExperimentalRemoteClusterService"] = strconv.FormatBool(*c.ConnectedWorkspacesSettings.EnableRemoteClusterService)
+ 	props["CollapsedThreads"] = *c.ServiceSettings.CollapsedThreads
+ 	props["EnableCustomGroups"] = strconv.FormatBool(*c.ServiceSettings.EnableCustomGroups)
+ 	props["PostPriority"] = strconv.FormatBool(*c.ServiceSettings.PostPriority)
+@@ -223,11 +224,6 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 			props["DataRetentionFileRetentionHours"] = strconv.FormatInt(int64(c.DataRetentionSettings.GetFileRetentionHours()), 10)
+ 		}
+ 
+-		if license.HasSharedChannels() {
+-			props["ExperimentalSharedChannels"] = strconv.FormatBool(*c.ConnectedWorkspacesSettings.EnableSharedChannels)
+-			props["ExperimentalRemoteClusterService"] = strconv.FormatBool(*c.ConnectedWorkspacesSettings.EnableRemoteClusterService)
+-		}
+-
+ 		if model.MinimumEnterpriseLicense(license) {
+ 			props["MobileEnableBiometrics"] = strconv.FormatBool(*c.NativeAppSettings.MobileEnableBiometrics)
+ 			props["MobilePreventScreenCapture"] = strconv.FormatBool(*c.NativeAppSettings.MobilePreventScreenCapture)
+diff --git a/server/config/client_test.go b/server/config/client_test.go
+index 6c922f8cf545..823541754de7 100644
+--- a/server/config/client_test.go
++++ b/server/config/client_test.go
+@@ -259,7 +259,7 @@ func TestGetClientConfig(t *testing.T) {
+ 			nil,
+ 		},
+ 		{
+-			"Shared channels other license",
++			"Shared channels without a shared channels license",
+ 			&model.Config{
+ 				ConnectedWorkspacesSettings: model.ConnectedWorkspacesSettings{
+ 					EnableSharedChannels: new(true),
+@@ -273,7 +273,23 @@ func TestGetClientConfig(t *testing.T) {
+ 				SkuShortName: "other",
+ 			},
+ 			map[string]string{
+-				"ExperimentalSharedChannels": "false",
++				"ExperimentalSharedChannels": "true",
++			},
++			nil,
++		},
++		{
++			"Shared channels and remote cluster service unlicensed",
++			&model.Config{
++				ConnectedWorkspacesSettings: model.ConnectedWorkspacesSettings{
++					EnableSharedChannels:       new(true),
++					EnableRemoteClusterService: new(true),
++				},
++			},
++			"",
++			nil,
++			map[string]string{
++				"ExperimentalSharedChannels":       "true",
++				"ExperimentalRemoteClusterService": "true",
+ 			},
+ 			nil,
+ 		},
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index 1a9e2714c574..95b9110a533f 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -4364,7 +4364,6 @@ const AdminDefinition: AdminDefinitionType = {
+                 isHidden: it.not(it.all(
+                     it.configIsTrue('ConnectedWorkspacesSettings', 'EnableSharedChannels'),
+                     it.configIsTrue('ConnectedWorkspacesSettings', 'EnableRemoteClusterService'),
+-                    it.licensedForFeature('SharedChannels'),
+                 )),
+                 schema: {
+                     id: 'SecureConnectionDetail',
+@@ -4378,7 +4377,6 @@ const AdminDefinition: AdminDefinitionType = {
+                 isHidden: it.not(it.all(
+                     it.configIsTrue('ConnectedWorkspacesSettings', 'EnableSharedChannels'),
+                     it.configIsTrue('ConnectedWorkspacesSettings', 'EnableRemoteClusterService'),
+-                    it.licensedForFeature('SharedChannels'),
+                 )),
+                 schema: {
+                     id: 'SecureConnections',

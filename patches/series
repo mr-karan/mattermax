@@ -9,3 +9,9 @@ remove-upsell-pages.patch
 fix-mfa-switch-title.patch
 no-enterprise-imports.patch
 id-loaded-push-notifications.patch
+unlock-scheduled-posts.patch
+unlock-permission-schemes.patch
+unlock-announcement-banner.patch
+unlock-custom-groups.patch
+unlock-guest-accounts.patch
+unlock-shared-channels.patch

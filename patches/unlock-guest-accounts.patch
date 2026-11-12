@@ -1,0 +1,595 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Karan Sharma <hello@mrkaran.dev>
+Date: Thu, 12 Nov 2026 22:25:25 +0530
+Subject: [PATCH] feat: guest accounts and guest magic links without a license
+
+Mattermax-Patch: unlock-guest-accounts.patch
+---
+ server/channels/api4/team.go                  |  12 --
+ server/channels/api4/team_test.go             |  19 +--
+ server/channels/api4/user.go                  |  31 +---
+ server/channels/api4/user_test.go             |  77 ++++++++-
+ .../admin_console/admin_definition.tsx        |   1 -
+ .../__snapshots__/admin_sidebar.test.tsx.snap | 152 ++++++++++++++++++
+ .../system_users_list_actions/index.tsx       |   4 +-
+ .../components/channel_invite_modal/index.ts  |   3 +-
+ .../invitation_modal/index.test.tsx           |   8 +-
+ .../src/components/invitation_modal/index.tsx |   3 +-
+ 10 files changed, 236 insertions(+), 74 deletions(-)
+
+diff --git a/server/channels/api4/team.go b/server/channels/api4/team.go
+index 9344fb4c0b45..30824468937c 100644
+--- a/server/channels/api4/team.go
++++ b/server/channels/api4/team.go
+@@ -1783,11 +1783,6 @@ func inviteUsersToTeam(c *Context, w http.ResponseWriter, r *http.Request) {
+ func inviteGuestsToChannels(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	graceful := r.URL.Query().Get("graceful") != ""
+ 
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.InviteGuestsToChannels", "api.team.invite_guests_to_channels.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	if !*c.App.Config().GuestAccountsSettings.Enable {
+ 		c.Err = model.NewAppError("Api4.InviteGuestsToChannels", "api.team.invite_guests_to_channels.disabled.error", nil, "", http.StatusNotImplemented)
+ 		return
+@@ -1816,13 +1811,6 @@ func inviteGuestsToChannels(c *Context, w http.ResponseWriter, r *http.Request)
+ 		return
+ 	}
+ 
+-	guestEnabled := c.App.Channels().License() != nil && *c.App.Channels().License().Features.GuestAccounts
+-
+-	if !guestEnabled {
+-		c.Err = model.NewAppError("Api4.InviteGuestsToChannels", "api.team.invite_guests_to_channels.disabled.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	var guestsInvite model.GuestsInvite
+ 	if err := json.NewDecoder(r.Body).Decode(&guestsInvite); err != nil {
+ 		c.Err = model.NewAppError("Api4.inviteGuestsToChannels", "api.team.invite_guests_to_channels.invalid_body.app_error", nil, "", http.StatusBadRequest).Wrap(err)
+diff --git a/server/channels/api4/team_test.go b/server/channels/api4/team_test.go
+index 57e2eab73609..7ce0808f500f 100644
+--- a/server/channels/api4/team_test.go
++++ b/server/channels/api4/team_test.go
+@@ -4646,8 +4646,6 @@ func TestInviteGuestsToTeam(t *testing.T) {
+ 		th.App.UpdateConfig(func(cfg *model.Config) { cfg.GuestAccountsSettings.Enable = &enableGuestAccounts })
+ 	}()
+ 
+-	th.App.Srv().SetLicense(model.NewTestLicense(""))
+-
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.GuestAccountsSettings.Enable = false })
+ 	_, err = th.SystemAdminClient.InviteGuestsToTeam(context.Background(), th.BasicTeam.Id, emailList, []string{th.BasicChannel.Id}, "test-message")
+ 	assert.Error(t, err, "Should be disabled")
+@@ -4659,13 +4657,7 @@ func TestInviteGuestsToTeam(t *testing.T) {
+ 
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.EnableEmailInvitations = true })
+ 
+-	th.App.Srv().SetLicense(nil)
+-
+-	_, err = th.SystemAdminClient.InviteGuestsToTeam(context.Background(), th.BasicTeam.Id, emailList, []string{th.BasicChannel.Id}, "test-message")
+-	require.Error(t, err, "Should be disabled")
+-
+-	th.App.Srv().SetLicense(model.NewTestLicense(""))
+-	defer th.App.Srv().SetLicense(nil)
++	require.Nil(t, th.App.Channels().License())
+ 
+ 	_, err = th.SystemAdminClient.InviteGuestsToTeam(context.Background(), th.BasicTeam.Id, emailList, []string{th.BasicChannel.Id}, "test-message")
+ 	require.NoError(t, err)
+@@ -4773,8 +4765,8 @@ func TestInviteGuest(t *testing.T) {
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.GuestAccountsSettings.Enable = true })
+ 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.EnableEmailInvitations = true })
+ 
+-	t.Run("Guest Account not available in license returns forbidden", func(t *testing.T) {
+-		th.App.Srv().SetLicense(model.NewTestLicenseWithFalseDefaults("guest_accounts"))
++	t.Run("unlicensed server can invite guests", func(t *testing.T) {
++		th.App.Srv().SetLicense(nil)
+ 
+ 		guestsInvite := model.GuestsInvite{
+ 			Emails:   emailList,
+@@ -4786,9 +4778,8 @@ func TestInviteGuest(t *testing.T) {
+ 
+ 		res, err := th.SystemAdminClient.DoAPIPost(context.Background(), "/teams/"+th.BasicTeam.Id+"/invite-guests/email", string(buf))
+ 
+-		require.Equal(t, http.StatusForbidden, res.StatusCode)
+-		require.True(t, strings.Contains(err.Error(), "Guest accounts are disabled"))
+-		require.Error(t, err)
++		require.Equal(t, http.StatusOK, res.StatusCode)
++		require.NoError(t, err)
+ 	})
+ 
+ 	t.Run("Guest Account available in license returns OK", func(t *testing.T) {
+diff --git a/server/channels/api4/user.go b/server/channels/api4/user.go
+index d9aac8b3842c..c03e34ed5612 100644
+--- a/server/channels/api4/user.go
++++ b/server/channels/api4/user.go
+@@ -268,10 +268,6 @@ func createUser(c *Context, w http.ResponseWriter, r *http.Request) {
+ 		auditRec.AddMeta("token_type", token.Type)
+ 
+ 		if token.Type == model.TokenTypeGuestInvitation {
+-			if c.App.Channels().License() == nil {
+-				c.Err = model.NewAppError("CreateUserWithToken", "api.user.create_user.guest_accounts.license.app_error", nil, "", http.StatusBadRequest)
+-				return
+-			}
+ 			if !*c.App.Config().GuestAccountsSettings.Enable {
+ 				c.Err = model.NewAppError("CreateUserWithToken", "api.user.create_user.guest_accounts.disabled.app_error", nil, "", http.StatusBadRequest)
+ 				return
+@@ -2245,10 +2241,6 @@ func login(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	}
+ 
+ 	if user.IsGuest() {
+-		if c.App.Channels().License() == nil {
+-			c.Err = model.NewAppError("login", "api.user.login.guest_accounts.license.error", nil, "", http.StatusUnauthorized)
+-			return
+-		}
+ 		if !*c.App.Config().GuestAccountsSettings.Enable {
+ 			c.Err = model.NewAppError("login", "api.user.login.guest_accounts.disabled.error", nil, "", http.StatusUnauthorized)
+ 			return
+@@ -2435,8 +2427,7 @@ func getLoginType(c *Context, w http.ResponseWriter, r *http.Request) {
+ 	// guest magic link is enabled. We can consider adding support for other
+ 	// login methods in the future, and this check may be removed.
+ 	if !*c.App.Config().GuestAccountsSettings.EnableGuestMagicLink ||
+-		!*c.App.Config().GuestAccountsSettings.Enable ||
+-		!*c.App.Channels().License().Features.GuestAccounts {
++		!*c.App.Config().GuestAccountsSettings.Enable {
+ 		w.WriteHeader(http.StatusNotFound)
+ 		return
+ 	}
+@@ -2488,14 +2479,6 @@ func getLoginType(c *Context, w http.ResponseWriter, r *http.Request) {
+ 			return false
+ 		}
+ 
+-		if c.App.Channels().License() == nil {
+-			return false
+-		}
+-
+-		if !*c.App.Channels().License().Features.GuestAccounts {
+-			return false
+-		}
+-
+ 		if !*c.App.Config().GuestAccountsSettings.EnableGuestMagicLink {
+ 			return false
+ 		}
+@@ -3545,23 +3528,11 @@ func demoteUserToGuest(c *Context, w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 
+-	if c.App.Channels().License() == nil {
+-		c.Err = model.NewAppError("Api4.demoteUserToGuest", "api.team.demote_user_to_guest.license.error", nil, "", http.StatusNotImplemented)
+-		return
+-	}
+-
+ 	if !*c.App.Config().GuestAccountsSettings.Enable {
+ 		c.Err = model.NewAppError("Api4.demoteUserToGuest", "api.team.demote_user_to_guest.disabled.error", nil, "", http.StatusNotImplemented)
+ 		return
+ 	}
+ 
+-	guestEnabled := c.App.Channels().License() != nil && *c.App.Channels().License().Features.GuestAccounts
+-
+-	if !guestEnabled {
+-		c.Err = model.NewAppError("Api4.demoteUserToGuest", "api.team.invite_guests_to_channels.disabled.error", nil, "", http.StatusForbidden)
+-		return
+-	}
+-
+ 	auditRec := c.MakeAuditRecord(model.AuditEventDemoteUserToGuest, model.AuditStatusFail)
+ 	model.AddEventParameterToAuditRec(auditRec, "user_id", c.Params.UserId)
+ 	defer c.LogAuditRec(auditRec)
+diff --git a/server/channels/api4/user_test.go b/server/channels/api4/user_test.go
+index 0f4c21805a31..4c6ba1497e5e 100644
+--- a/server/channels/api4/user_test.go
++++ b/server/channels/api4/user_test.go
+@@ -5556,6 +5556,67 @@ func TestLoginWithGuestMagicLinkTokenRejectsDeactivatedUser(t *testing.T) {
+ 	})
+ }
+ 
++func TestGuestAccountsWithoutLicense(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t).InitBasic(t)
++
++	_, err := th.Client.Logout(context.Background())
++	require.NoError(t, err)
++
++	require.Nil(t, th.App.Channels().License())
++	th.App.UpdateConfig(func(cfg *model.Config) {
++		*cfg.GuestAccountsSettings.Enable = true
++		*cfg.GuestAccountsSettings.EnableGuestMagicLink = true
++	})
++
++	t.Run("guest signs up with an invitation token and logs in with a password", func(t *testing.T) {
++		user := model.User{Email: th.GenerateTestEmail(), Password: model.NewTestPassword(), Username: GenerateTestUsername()}
++		token := model.NewToken(
++			model.TokenTypeGuestInvitation,
++			model.MapToJSON(map[string]string{"teamId": th.BasicTeam.Id, "channels": th.BasicChannel.Id, "email": user.Email, "senderId": th.BasicUser.Id}),
++		)
++		require.NoError(t, th.App.Srv().Store().Token().Save(token))
++
++		ruser, resp, err := th.Client.CreateUserWithToken(context.Background(), &user, token.Token)
++		require.NoError(t, err)
++		CheckCreatedStatus(t, resp)
++		require.True(t, ruser.IsGuest())
++
++		guestClient := th.CreateClient()
++		loggedIn, _, err := guestClient.Login(context.Background(), user.Email, user.Password)
++		require.NoError(t, err)
++		assert.Equal(t, ruser.Id, loggedIn.Id)
++	})
++
++	t.Run("magic link guest gets the magic link login type and logs in with the emailed token", func(t *testing.T) {
++		email := strings.ToLower(model.NewId()) + "@example.com"
++		invitationToken := model.NewToken(
++			model.TokenTypeGuestMagicLinkInvitation,
++			model.MapToJSON(map[string]string{"teamId": th.BasicTeam.Id, "channels": th.BasicChannel.Id, "email": email, "guest": "true", "senderId": th.BasicUser.Id}),
++		)
++		require.NoError(t, th.App.Srv().Store().Token().Save(invitationToken))
++		guestUser, appErr := th.App.AuthenticateUserForGuestMagicLink(th.Context, invitationToken.Token)
++		require.Nil(t, appErr)
++		require.True(t, guestUser.IsGuest())
++
++		loginType, resp, err := th.Client.LoginType(context.Background(), email)
++		require.NoError(t, err)
++		CheckOKStatus(t, resp)
++		assert.Equal(t, model.UserAuthServiceMagicLink, loginType.AuthService)
++
++		loginToken, err := th.App.Srv().Store().Token().GetTokenByTypeAndEmail(model.TokenTypeGuestMagicLink, email)
++		require.NoError(t, err)
++
++		res, err := th.Client.DoAPIPost(context.Background(), "/users/login", model.MapToJSON(map[string]string{"magic_link_token": loginToken.Token}))
++		require.NoError(t, err)
++		defer closeBody(res)
++		require.NotEmpty(t, res.Header.Get(model.HeaderToken))
++		user, _, err := model.DecodeJSONFromResponse[*model.User](res)
++		require.NoError(t, err)
++		assert.Equal(t, guestUser.Id, user.Id)
++	})
++}
++
+ func TestLoginCookies(t *testing.T) {
+ 	mainHelper.Parallel(t)
+ 	t.Run("should return cookies with X-Requested-With header", func(t *testing.T) {
+@@ -8159,14 +8220,18 @@ func TestDemoteUserToGuest(t *testing.T) {
+ 	user := th.BasicUser
+ 	user2 := th.BasicUser2
+ 
+-	t.Run("Guest Account not available in license returns forbidden", func(t *testing.T) {
+-		th.App.Srv().SetLicense(model.NewTestLicenseWithFalseDefaults("guest_accounts"))
++	t.Run("unlicensed server can demote a user to guest", func(t *testing.T) {
++		appErr := th.App.Srv().RemoveLicense()
++		require.Nil(t, appErr)
++		fresh := th.CreateUser(t)
+ 
+-		res, err := th.SystemAdminClient.DoAPIPost(context.Background(), "/users/"+user2.Id+"/demote", "")
++		res, err := th.SystemAdminClient.DoAPIPost(context.Background(), "/users/"+fresh.Id+"/demote", "")
+ 
+-		require.Equal(t, http.StatusForbidden, res.StatusCode)
+-		require.True(t, strings.Contains(err.Error(), "Guest accounts are disabled"))
+-		require.Error(t, err)
++		require.Equal(t, http.StatusOK, res.StatusCode)
++		require.NoError(t, err)
++		demoted, appErr := th.App.GetUser(th.Context, fresh.Id)
++		require.Nil(t, appErr)
++		require.True(t, demoted.IsGuest())
+ 	})
+ 
+ 	t.Run("Guest Account available in license returns OK", func(t *testing.T) {
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index cc8d6999a569..1a9e2714c574 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -5819,7 +5819,6 @@ const AdminDefinition: AdminDefinitionType = {
+                 title: defineMessage({id: 'admin.sidebar.guest_access', defaultMessage: 'Guest Access'}),
+                 searchableStrings: magicLinkSearchableStrings,
+                 isHidden: it.any(
+-                    it.not(it.licensedForFeature('GuestAccounts')),
+                     it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.AUTHENTICATION.GUEST_ACCESS)),
+                 ),
+                 schema: {
+diff --git a/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap b/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
+index e59620e05516..177e4906cf8a 100644
+--- a/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
++++ b/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
+@@ -1689,6 +1689,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -3550,6 +3569,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -5415,6 +5453,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -7266,6 +7323,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -9079,6 +9155,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -11001,6 +11096,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -12814,6 +12928,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+@@ -16351,6 +16484,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="authentication.guest_access"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/authentication/guest_access"
++                              id="authentication/guest_access"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                Guest Access
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="authentication.guest_access_feature_discovery"
+diff --git a/webapp/channels/src/components/admin_console/system_users/system_users_list_actions/index.tsx b/webapp/channels/src/components/admin_console/system_users/system_users_list_actions/index.tsx
+index de1e38417390..e57b417cf9e7 100644
+--- a/webapp/channels/src/components/admin_console/system_users/system_users_list_actions/index.tsx
++++ b/webapp/channels/src/components/admin_console/system_users/system_users_list_actions/index.tsx
+@@ -13,7 +13,6 @@ import {updateUserActive} from 'mattermost-redux/actions/users';
+ import {Permissions} from 'mattermost-redux/constants';
+ import General from 'mattermost-redux/constants/general';
+ import {getConfig} from 'mattermost-redux/selectors/entities/admin';
+-import {getLicense} from 'mattermost-redux/selectors/entities/general';
+ import {haveISystemPermission} from 'mattermost-redux/selectors/entities/roles_helpers';
+ import {isSystemAdmin, isGuest} from 'mattermost-redux/utils/user_utils';
+ 
+@@ -55,7 +54,6 @@ export function SystemUsersListAction({user, currentUser, tableId, rowIndex, onE
+     const {formatMessage} = useIntl();
+     const dispatch = useDispatch();
+     const config = useSelector(getConfig);
+-    const isLicensed = useSelector(getLicense)?.IsLicensed === 'true';
+     const haveSysConsoleWriteUserManagementUsersPermissions = useSelector((state: GlobalState) => haveISystemPermission(state, {permission: Permissions.SYSCONSOLE_WRITE_USERMANAGEMENT_USERS}));
+     const showManageUserSettings = useSelector(getShowManageUserSettings);
+ 
+@@ -505,7 +503,7 @@ export function SystemUsersListAction({user, currentUser, tableId, rowIndex, onE
+                     onClick={handlePromoteToMemberClick}
+                 />
+             }
+-            {!isGuest(user.roles) && user.id !== currentUser.id && isLicensed && config.GuestAccountsSettings?.Enable &&
++            {!isGuest(user.roles) && user.id !== currentUser.id && config.GuestAccountsSettings?.Enable &&
+                 <Menu.Item
+                     id={`${menuItemIdPrefix}-demoteToGuest`}
+                     labels={
+diff --git a/webapp/channels/src/components/channel_invite_modal/index.ts b/webapp/channels/src/components/channel_invite_modal/index.ts
+index 0ad8f27dd569..12771abd95e9 100644
+--- a/webapp/channels/src/components/channel_invite_modal/index.ts
++++ b/webapp/channels/src/components/channel_invite_modal/index.ts
+@@ -86,9 +86,8 @@ function makeMapStateToProps(initialState: GlobalState, initialProps: OwnProps)
+ 
+         const guestAccountsEnabled = config.EnableGuestAccounts === 'true';
+         const emailInvitationsEnabled = config.EnableEmailInvitations === 'true';
+-        const isLicensed = license && license.IsLicensed === 'true';
+         const isGroupConstrained = Boolean(currentTeam?.group_constrained);
+-        const canInviteGuests = !isGroupConstrained && isLicensed && guestAccountsEnabled && haveICurrentTeamPermission(state, Permissions.INVITE_GUEST);
++        const canInviteGuests = !isGroupConstrained && guestAccountsEnabled && haveICurrentTeamPermission(state, Permissions.INVITE_GUEST);
+         const enableCustomUserGroups = isCustomGroupsEnabled(state);
+ 
+         const isGroupsEnabled = enableCustomUserGroups || (license?.IsLicensed === 'true' && license?.LDAPGroups === 'true');
+diff --git a/webapp/channels/src/components/invitation_modal/index.test.tsx b/webapp/channels/src/components/invitation_modal/index.test.tsx
+index ebf46dbd2eaf..1f4320b8d0d1 100644
+--- a/webapp/channels/src/components/invitation_modal/index.test.tsx
++++ b/webapp/channels/src/components/invitation_modal/index.test.tsx
+@@ -96,7 +96,7 @@ describe('mapStateToProps', () => {
+         expect(props.canInviteGuests).toBe(false);
+     });
+ 
+-    test('canInviteGuests is false when BuildEnterpriseReady is false', () => {
++    test('canInviteGuests is true when BuildEnterpriseReady is false and unlicensed', () => {
+         const testState = {
+             ...initialState,
+             entities: {
+@@ -107,7 +107,7 @@ describe('mapStateToProps', () => {
+                         BuildEnterpriseReady: 'false',
+                     },
+                     license: {
+-                        IsLicensed: 'true',
++                        IsLicensed: 'false',
+                     },
+                 },
+                 teams: {
+@@ -115,7 +115,7 @@ describe('mapStateToProps', () => {
+                     teams: {
+                         [currentTeamId]: {
+                             id: currentTeamId,
+-                            group_constrained: true,
++                            group_constrained: false,
+                         },
+                     },
+                 },
+@@ -123,7 +123,7 @@ describe('mapStateToProps', () => {
+         } as unknown as GlobalState;
+ 
+         const props = mapStateToProps(testState, {});
+-        expect(props.canInviteGuests).toBe(false);
++        expect(props.canInviteGuests).toBe(true);
+     });
+ 
+     test('canInviteGuests is true when group_constrained is false', () => {
+diff --git a/webapp/channels/src/components/invitation_modal/index.tsx b/webapp/channels/src/components/invitation_modal/index.tsx
+index 2a2c64c02f30..798366e8ba47 100644
+--- a/webapp/channels/src/components/invitation_modal/index.tsx
++++ b/webapp/channels/src/components/invitation_modal/index.tsx
+@@ -71,9 +71,8 @@ export function mapStateToProps(state: GlobalState, props: OwnProps) {
+     const guestAccountsEnabled = config.EnableGuestAccounts === 'true';
+     const emailInvitationsEnabled = config.EnableEmailInvitations === 'true';
+     const lockProfileFieldsForEmailUsers = normalizeLockProfileFieldsSetting(config.LockProfileFieldsForEmailUsers);
+-    const isEnterpriseReady = config.BuildEnterpriseReady === 'true';
+     const isGroupConstrained = Boolean(currentTeam?.group_constrained);
+-    const calculatedCanInviteGuests = !isGroupConstrained && isEnterpriseReady && guestAccountsEnabled && haveICurrentTeamPermission(state, Permissions.INVITE_GUEST);
++    const calculatedCanInviteGuests = !isGroupConstrained && guestAccountsEnabled && haveICurrentTeamPermission(state, Permissions.INVITE_GUEST);
+     const canInviteGuests = props.canInviteGuests === undefined ? calculatedCanInviteGuests : (calculatedCanInviteGuests && props.canInviteGuests);
+ 
+     const isCloud = license.Cloud === 'true';

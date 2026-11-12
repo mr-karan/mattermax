@@ -1,0 +1,343 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Karan Sharma <hello@mrkaran.dev>
+Date: Thu, 12 Nov 2026 22:08:20 +0530
+Subject: [PATCH] feat: system announcement banner without a license
+
+Mattermax-Patch: unlock-announcement-banner.patch
+---
+ server/config/client.go                       |  18 +--
+ server/config/client_test.go                  |  22 +++
+ .../admin_console/admin_definition.tsx        |   1 -
+ .../__snapshots__/admin_sidebar.test.tsx.snap | 152 ++++++++++++++++++
+ .../src/selectors/admin_console.test.tsx      |  16 ++
+ 5 files changed, 195 insertions(+), 14 deletions(-)
+
+diff --git a/server/config/client.go b/server/config/client.go
+index 30479e155dc3..0c56bf3e164f 100644
+--- a/server/config/client.go
++++ b/server/config/client.go
+@@ -125,11 +125,11 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 	props["SamlPositionAttributeSet"] = "false"
+ 	props["EnableCluster"] = "false"
+ 	props["EnableMetrics"] = "false"
+-	props["EnableBanner"] = "false"
+-	props["BannerText"] = ""
+-	props["BannerColor"] = ""
+-	props["BannerTextColor"] = ""
+-	props["AllowBannerDismissal"] = "false"
++	props["EnableBanner"] = strconv.FormatBool(*c.AnnouncementSettings.EnableBanner)
++	props["BannerText"] = *c.AnnouncementSettings.BannerText
++	props["BannerColor"] = *c.AnnouncementSettings.BannerColor
++	props["BannerTextColor"] = *c.AnnouncementSettings.BannerTextColor
++	props["AllowBannerDismissal"] = strconv.FormatBool(*c.AnnouncementSettings.AllowBannerDismissal)
+ 	props["EnableThemeSelection"] = "true"
+ 	props["DefaultTheme"] = ""
+ 	props["AllowCustomThemes"] = "true"
+@@ -209,14 +209,6 @@ func GenerateClientConfig(c *model.Config, telemetryID string, license *model.Li
+ 			props["EnableNotificationMetrics"] = strconv.FormatBool(*c.MetricsSettings.EnableNotificationMetrics)
+ 		}
+ 
+-		if *license.Features.Announcement {
+-			props["EnableBanner"] = strconv.FormatBool(*c.AnnouncementSettings.EnableBanner)
+-			props["BannerText"] = *c.AnnouncementSettings.BannerText
+-			props["BannerColor"] = *c.AnnouncementSettings.BannerColor
+-			props["BannerTextColor"] = *c.AnnouncementSettings.BannerTextColor
+-			props["AllowBannerDismissal"] = strconv.FormatBool(*c.AnnouncementSettings.AllowBannerDismissal)
+-		}
+-
+ 		if *license.Features.ThemeManagement {
+ 			props["EnableThemeSelection"] = strconv.FormatBool(*c.ThemeSettings.EnableThemeSelection)
+ 			props["DefaultTheme"] = *c.ThemeSettings.DefaultTheme
+diff --git a/server/config/client_test.go b/server/config/client_test.go
+index d7bf934fedf1..a9f7ed1e4d22 100644
+--- a/server/config/client_test.go
++++ b/server/config/client_test.go
+@@ -52,6 +52,28 @@ func TestGetClientConfig(t *testing.T) {
+ 			},
+ 			nil,
+ 		},
++		{
++			"unlicensed announcement banner",
++			&model.Config{
++				AnnouncementSettings: model.AnnouncementSettings{
++					EnableBanner:         new(true),
++					BannerText:           new("hi"),
++					BannerColor:          new("#123456"),
++					BannerTextColor:      new("#abcdef"),
++					AllowBannerDismissal: new(true),
++				},
++			},
++			"",
++			nil,
++			map[string]string{
++				"EnableBanner":         "true",
++				"BannerText":           "hi",
++				"BannerColor":          "#123456",
++				"BannerTextColor":      "#abcdef",
++				"AllowBannerDismissal": "true",
++			},
++			nil,
++		},
+ 		{
+ 			"licensed, but not for theme management",
+ 			&model.Config{
+diff --git a/webapp/channels/src/components/admin_console/admin_definition.tsx b/webapp/channels/src/components/admin_console/admin_definition.tsx
+index 1ec6f7d463be..98ee4a8f32ec 100644
+--- a/webapp/channels/src/components/admin_console/admin_definition.tsx
++++ b/webapp/channels/src/components/admin_console/admin_definition.tsx
+@@ -3405,7 +3405,6 @@ const AdminDefinition: AdminDefinitionType = {
+                 url: 'site_config/announcement_banner',
+                 title: defineMessage({id: 'admin.sidebar.announcement', defaultMessage: 'System-wide Notifications'}),
+                 isHidden: it.any(
+-                    it.not(it.licensedForFeature('Announcement')),
+                     it.not(it.userHasReadPermissionOnResource(RESOURCE_KEYS.SITE.ANNOUNCEMENT_BANNER)),
+                 ),
+                 schema: {
+diff --git a/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap b/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
+index c8ce18c00299..e59620e05516 100644
+--- a/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
++++ b/webapp/channels/src/components/admin_console/admin_sidebar/__snapshots__/admin_sidebar.test.tsx.snap
+@@ -1293,6 +1293,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -3112,6 +3131,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -4958,6 +4996,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -6794,6 +6851,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -8607,6 +8683,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -10510,6 +10605,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -12304,6 +12418,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+@@ -15803,6 +15936,25 @@ c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V4z M20,4v5H4V4H20z M22,15v5c0,1.1-0.9,2-2,2H
+                               class="nav nav__sub-menu subsections"
+                             />
+                           </li>
++                          <li
++                            class="sidebar-section"
++                            data-testid="site.announcement_banner"
++                          >
++                            <a
++                              class="sidebar-section-title"
++                              href="/admin_console/site_config/announcement_banner"
++                              id="site_config/announcement_banner"
++                            >
++                              <span
++                                class="sidebar-section-title__text"
++                              >
++                                System-wide Notifications
++                              </span>
++                            </a>
++                            <ul
++                              class="nav nav__sub-menu subsections"
++                            />
++                          </li>
+                           <li
+                             class="sidebar-section"
+                             data-testid="site.announcement_banner_feature_discovery"
+diff --git a/webapp/channels/src/selectors/admin_console.test.tsx b/webapp/channels/src/selectors/admin_console.test.tsx
+index e2f619712599..17be050e10f5 100644
+--- a/webapp/channels/src/selectors/admin_console.test.tsx
++++ b/webapp/channels/src/selectors/admin_console.test.tsx
+@@ -3,8 +3,11 @@
+ 
+ import cloneDeep from 'lodash/cloneDeep';
+ 
++import {RESOURCE_KEYS} from 'mattermost-redux/constants/permissions_sysconsole';
++
+ import AdminDefinition from 'components/admin_console/admin_definition';
+ import {removeUpsellPages} from 'components/admin_console/remove_upsell_pages';
++import type {Check} from 'components/admin_console/types';
+ 
+ import type {GlobalState} from 'types/store';
+ 
+@@ -34,6 +37,19 @@ describe('Selectors.AdminConsole', () => {
+             expect(AdminDefinition.authentication.subsections.openid_feature_discovery).toBeDefined();
+         });
+ 
++        it('should show the announcement banner page without a license', () => {
++            const state = {plugins: {adminConsoleReducers: {}}} as GlobalState;
++            const banner = getAdminDefinition(state).site.subsections.announcement_banner;
++            const isHidden = banner.isHidden as Exclude<Check, boolean>;
++            const consoleAccess = {
++                read: {[RESOURCE_KEYS.SITE.ANNOUNCEMENT_BANNER]: true},
++                write: {[RESOURCE_KEYS.SITE.ANNOUNCEMENT_BANNER]: true},
++            };
++
++            expect(isHidden({}, {}, {}, false, consoleAccess)).toBe(false);
++            expect(isHidden({}, {}, {}, false, {read: {}, write: {}})).toBe(true);
++        });
++
+         it('should allow to remove everything with a plugin', () => {
+             const result = getAdminDefinition({
+                 plugins: {
