@@ -21,3 +21,4 @@ command-palette.patch
 quote-reply.patch
 voice-messages.patch
 read-receipts.patch
+slowmode.patch

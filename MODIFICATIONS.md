@@ -273,3 +273,15 @@ migration. One rule, `model.ReadReceiptVisible`, gates both the new
 `read_receipt` websocket event. The web app shows "Seen" or "Seen by N" under
 your newest message. Other members' last-viewed times stay hidden everywhere
 else. Mobile apps ignore the event.
+
+### slowmode.patch
+
+2026-11-13. Per-channel slowmode (Off, 5s, 10s, 30s, 1m, 5m, 15m, 1h), set by
+channel, team or system admins in a new Moderation tab of channel settings.
+Stored as a Systems row `channel_posting_rules_<channelId>`, served by
+`GET/PUT /api/v4/channels/{id}/posting_rules`. Enforced in
+`CreatePostAsUserWithFlags` (`app/post.go`, one call) with HTTP 429 and the
+seconds left. Deleted posts still count, so deleting your last post does not
+reset the wait. Admins, bots, webhook and system posts, and DMs/GMs are
+exempt. The web app shows an indicator and a countdown notice at the composer.
+Mobile apps get the server's error text.
