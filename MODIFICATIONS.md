@@ -210,3 +210,15 @@ Console. The client config now sends the configured values
 (`server/config/client.go`), and the four settings on Site Configuration >
 Customization are shown (`admin_definition.tsx`). The user settings theme
 picker already reads these values.
+
+### unlock-guest-permissions.patch
+
+2026-11-12. Allow editing guest role permissions without a license, so admins
+can change what guests may do (post and upload, react, mention, edit and
+delete posts, create private channels) in the System Scheme and in team
+override schemes. Upstream rejected patches to the guest roles without the
+GuestAccountsPermissions license feature (`api4/role.go`) and showed the
+Guests panels read-only (`permission_system_scheme_settings.tsx`,
+`permission_team_scheme_settings.tsx`). The guest Group Mentions permission is
+offered when custom groups are enabled (`guest_permissions_tree`), as it is for
+members. Role permission checks are unchanged.
