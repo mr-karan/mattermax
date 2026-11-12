@@ -380,3 +380,28 @@ removed in `app/audit.go`, `app/server.go`, `app/delivery_tracking_config.go`,
 `app/platform/log.go`, `config/logger.go`, `config/client.go`
 (`AuditLoggingActive`) and `admin_definition.tsx`. The audit certificate
 upload stays Cloud-only.
+
+### prometheus-metrics.patch
+
+2026-11-13. Prometheus metrics without a license, from a clean-room
+implementation of `einterfaces.MetricsInterface` in package `platform`
+(`metrics_prometheus.go`, `metrics_prometheus_client.go`,
+`metrics_prometheus_noop.go`), registered through the existing
+`RegisterMetricsInterface` hook. When `MetricsSettings.Enable` is true,
+`/metrics` is served on the existing metrics port
+(`MetricsSettings.ListenAddress`) beside the upstream pprof and plugin-metrics
+routes. 68 interface methods record; 50 are no-ops: 23 for features that stay
+enterprise-only (HA cluster, Elasticsearch, Redis cache, replica lag, access
+control, auto-translation) and 27 deferred until their client-supplied labels
+have a bounded mapping. Nothing records while `Enable` is false, except four
+up/down gauges that must stay balanced. `config/client.go` sends
+`EnableMetrics`, `EnableClientMetrics` and `EnableNotificationMetrics` without
+a license. `PerformanceReport.IsValid` rejects null samples and reports with
+more than 500 entries; client samples outside fixed per-metric limits are
+dropped. No user, channel or team ID becomes a label, and
+`MetricsSettings.ClientSideUserIds` has no effect. The report cap and value
+limits are estimates. Keep the whole metrics port private (loopback or a
+private address, firewalled): it also serves pprof and unauthenticated plugin
+metrics. The server logs a warning when it binds all interfaces. Keep
+`FeatureFlags.AggregatePluginMetrics` off, or use plugins that do not export
+Go runtime collectors.

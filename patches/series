@@ -30,3 +30,4 @@ unlock-enforce-mfa.patch
 unlock-lock-profile-fields.patch
 unlock-custom-terms-of-service.patch
 unlock-audit-logging.patch
+prometheus-metrics.patch
