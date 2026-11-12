@@ -13,3 +13,4 @@ unlock-scheduled-posts.patch
 unlock-permission-schemes.patch
 unlock-announcement-banner.patch
 unlock-custom-groups.patch
+unlock-guest-accounts.patch

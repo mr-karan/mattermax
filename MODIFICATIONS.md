@@ -168,3 +168,18 @@ custom groups without a license (`team_controller/actions`,
 gated: without a license their endpoints return 501, and group listings,
 lookups by name and mentions see only custom groups, for which
 `GroupStore.GetByNames` now honours the requested source.
+
+### unlock-guest-accounts.patch
+
+2026-11-12. Allow guest accounts and guest magic links without a license:
+inviting guests to channels by email or magic link, guest sign-up with an
+invitation token, guest login, demoting a member to guest, and passwordless
+guest sign-in. Upstream implements guests in its open-source code and rejects
+them on servers without a license. Its login type endpoint even dereferenced
+the missing license and crashed. The patch removes those checks
+(`api4/user.go`, `api4/team.go`); the `GuestAccountsSettings` switches still
+apply. The web app shows the Guest Access page, the guest option when
+inviting (hidden before because Mattermax builds are not "enterprise ready"),
+inviting guests to a channel, and "Demote to guest" without a license
+(`admin_definition.tsx`, `invitation_modal`, `channel_invite_modal`,
+`system_users_list_actions`). Custom guest role permissions stay gated.
