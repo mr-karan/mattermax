@@ -258,3 +258,18 @@ waveform and 1x/1.5x/2x speed. The button follows `EnableFileAttachments` and
 the `upload_file` permission. New files under `components/voice_message/`;
 small edits in `advanced_text_editor` and `file_attachment_list`. No server,
 schema or config change; mobile apps show a normal audio attachment.
+
+### read-receipts.patch
+
+2026-11-13. Opt-in read receipts for direct and group messages. An admin
+switch, `TeamSettings.EnableReadReceipts` (off by default), and a personal
+Settings > Display toggle (on by default) stored as the
+`display_settings`/`read_receipts` preference. Turning receipts off is
+reciprocal: that user neither sends nor sees receipts, and turning them back
+on records the time, so reads made while off stay private. A receipt is the
+other member's existing `ChannelMembers.LastViewedAt`, so there is no
+migration. One rule, `model.ReadReceiptVisible`, gates both the new
+`GET /api/v4/channels/{id}/read_receipts` endpoint and the new
+`read_receipt` websocket event. The web app shows "Seen" or "Seen by N" under
+your newest message. Other members' last-viewed times stay hidden everywhere
+else. Mobile apps ignore the event.
