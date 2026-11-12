@@ -358,3 +358,12 @@ removed: `CheckLockedProfileFields` and `IsProfileImageLockedForUser` in
 `app/user.go`, the invite profile check in `app/team.go`, the Enterprise-only
 client config prop in `config/client.go` (which empties and removes that
 license block), and the hidden System Console setting.
+
+### unlock-custom-terms-of-service.patch
+
+2026-11-13. Admins can enable Custom Terms of Service without a license, and
+users must accept them on login and again after the re-acceptance period.
+Gates removed in `api4/terms_of_service.go` (create), `config/client.go`
+(`EnableCustomTermsOfService` and `CustomTermsOfServiceReAcceptancePeriod` in
+the limited client config), the mattermost-redux `shouldShowTermsOfService`
+selector, the System Console page and its enable toggle.
