@@ -295,3 +295,16 @@ no background job. Late replies are rejected with HTTP 403. Channel admins and
 above can still reply, which reopens the thread. Root posts and reactions are
 unaffected. The thread view shows an archived notice instead of the reply box
 (`create_comment.tsx`, +6).
+
+### unlock-content-flagging.patch
+
+2026-11-13. Content flagging (Data Spillage Handling) works without a license:
+users flag posts with a reason, configured reviewers get a review post from
+the content review bot and can keep or remove the post. Gates removed: the
+Enterprise Advanced check in `api4/content_flagging.go`
+(`requireContentFlaggingAvailable`), the `ContentFlaggingEnabled` client
+config in `config/client.go`, and the license tier check on the System Console
+page in `admin_definition.tsx`. The `ContentFlagging` feature flag already
+defaults on upstream; admins still enable the feature in
+`ContentFlaggingSettings.EnableContentFlagging`. Picking LDAP groups as
+reviewers stays behind the LDAP groups license.

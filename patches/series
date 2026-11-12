@@ -23,3 +23,4 @@ voice-messages.patch
 read-receipts.patch
 slowmode.patch
 thread-auto-archive.patch
+unlock-content-flagging.patch
