@@ -336,3 +336,15 @@ config without checking the license. `MobileEnableSecureFilePreview` and
 stock app also checks that license tier itself
 (`app/queries/servers/security.ts`), so unlocking them on the server would
 show settings that do nothing. Intune MAM stays gated.
+
+### unlock-enforce-mfa.patch
+
+2026-11-13. Admins can require multi-factor authentication for all users
+(`ServiceSettings.EnforceMultifactorAuthentication`) without a license, and
+guest enforcement (`GuestAccountsSettings.EnforceMultifactorAuthentication`)
+takes effect too. Gates removed: `CheckUserMfa` in `app/authentication.go`,
+the licensed-only client config prop in `config/client.go`, the System Console
+setting, and the webapp MFA-required redirect checks (`utils/route.tsx`,
+logged_in, team_controller, mfa_controller, the MFA settings section). TOTP
+lives in AGPL `server/platform/shared/mfa`. A licensed server whose license
+lacks the MFA feature now also enforces MFA when the config asks for it.
