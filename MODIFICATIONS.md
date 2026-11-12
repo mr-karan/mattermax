@@ -112,3 +112,18 @@ fetched message with the same code as the "full" setting. The System Console
 offers the option without a license (`admin_definition.tsx`). Written from
 Mattermost's open-source notification code, without consulting Mattermost's
 enterprise code.
+
+### unlock-scheduled-posts.patch
+
+2026-11-12. Allow scheduled messages (including recurring ones), message
+acknowledgements and persistent notifications without a license. Upstream
+implements all three in its open-source code and disables them on servers
+without a Professional license. The patch removes those checks: the client
+config sends `ScheduledPosts` and `PostAcknowledgements` (`server/config/client.go`),
+the scheduled post API and job run (`api4/scheduled_post.go`,
+`app/scheduled_post_job.go`), the acknowledge endpoints and post priority
+checks accept the requests (`api4/post.go`, `app/post_permission_utils.go`),
+and the persistent notification job runs (`jobs/post_persistent_notifications`).
+The web app shows scheduling and its System Console setting without a license
+(`selectors/entities/scheduled_posts.ts`, `admin_definition.tsx`). Tests that
+asserted the license errors now assert the feature works.

@@ -9,3 +9,4 @@ remove-upsell-pages.patch
 fix-mfa-switch-title.patch
 no-enterprise-imports.patch
 id-loaded-push-notifications.patch
+unlock-scheduled-posts.patch
