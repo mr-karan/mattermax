@@ -245,3 +245,16 @@ and focuses it without opening a thread. New files under
 `components/quote_reply/`; `advanced_text_editor.tsx` registers its composer
 with one hook call, and `dot_menu` adds the item and shortcut. No server
 change.
+
+### voice-messages.patch
+
+2026-11-13. Record voice messages from the web composer. A microphone button
+records up to 5 minutes (MP4/AAC where the browser supports it so recordings
+play on iOS, WebM/Opus otherwise) and uploads the recording through the normal
+file upload path, so the post is an ordinary post with an audio file. The
+duration and a 64-bar waveform are stored in `Post.Props.voice_messages`,
+keyed by file id, and those files get an inline player with a seekable
+waveform and 1x/1.5x/2x speed. The button follows `EnableFileAttachments` and
+the `upload_file` permission. New files under `components/voice_message/`;
+small edits in `advanced_text_editor` and `file_attachment_list`. No server,
+schema or config change; mobile apps show a normal audio attachment.

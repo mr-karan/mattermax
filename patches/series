@@ -19,3 +19,4 @@ unlock-theme-management.patch
 unlock-guest-permissions.patch
 command-palette.patch
 quote-reply.patch
+voice-messages.patch
