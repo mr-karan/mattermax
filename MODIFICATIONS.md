@@ -199,3 +199,14 @@ Workspaces pages (`admin_definition.tsx`). The test helpers no longer add a
 license when these settings are on, so the shared channel tests run without
 one. DMs with remote users stay behind upstream's `EnableSharedChannelsDMs`
 feature flag.
+
+### unlock-theme-management.patch
+
+2026-11-12. Allow theme management without a license: admins can set the
+default theme, turn theme selection and custom themes on or off, and limit
+the themes users can pick. Upstream sent fixed values for `ThemeSettings` to
+clients without a ThemeManagement license and hid the settings in the System
+Console. The client config now sends the configured values
+(`server/config/client.go`), and the four settings on Site Configuration >
+Customization are shown (`admin_definition.tsx`). The user settings theme
+picker already reads these values.
