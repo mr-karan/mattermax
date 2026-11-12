@@ -234,3 +234,14 @@ autocomplete. Without ">", the switcher works as before and shows a hint row.
 The commands live in new files under
 `components/quick_switch_modal/command_palette/`; `quick_switch_modal.tsx`
 gains the provider, the hint and Enter handling. No server change.
+
+### quote-reply.patch
+
+2026-11-13. Add "Quote reply" (shortcut Q) to the post menu. It inserts a
+Markdown quote of the post (first 5 lines, "[attachment]" when files are
+attached), credited to the author's display name, with a link to the
+original, into the channel's composer, or the thread's composer in a thread,
+and focuses it without opening a thread. New files under
+`components/quote_reply/`; `advanced_text_editor.tsx` registers its composer
+with one hook call, and `dot_menu` adds the item and shortcut. No server
+change.
