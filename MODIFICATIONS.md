@@ -285,3 +285,13 @@ seconds left. Deleted posts still count, so deleting your last post does not
 reset the wait. Admins, bots, webhook and system posts, and DMs/GMs are
 exempt. The web app shows an indicator and a countdown notice at the composer.
 Mobile apps get the server's error text.
+
+### thread-auto-archive.patch
+
+2026-11-13. Per-channel thread auto-archive (Off, 1, 3, 7, 30 days without
+replies), in the same Moderation tab and the same Systems row as slowmode.
+Checked at reply time from max(root `CreateAt`, `Threads.LastReplyAt`), with
+no background job. Late replies are rejected with HTTP 403. Channel admins and
+above can still reply, which reopens the thread. Root posts and reactions are
+unaffected. The thread view shows an archived notice instead of the reply box
+(`create_comment.tsx`, +6).

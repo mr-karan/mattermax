@@ -22,3 +22,4 @@ quote-reply.patch
 voice-messages.patch
 read-receipts.patch
 slowmode.patch
+thread-auto-archive.patch
