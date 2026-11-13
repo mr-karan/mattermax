@@ -471,3 +471,13 @@ Gates removed: `App.emailNotificationContentsType` in
 `app/email/email_batching.go` (batched emails), and the System Console
 control's license check. Generic emails still name the channel, as upstream
 does.
+
+### unlock-anonymous-urls.patch
+
+2026-11-13. `PrivacySettings.UseAnonymousURLs` gives new channels (not DMs or
+GMs) and new teams server-generated ID names without a license; existing teams
+and channels keep their names. Gates removed: `createChannel` in
+`api4/channel.go`, `createTeam` in `api4/team.go`, `PluginAPI.CreateTeam` and
+`PluginAPI.CreateChannel` in `app/plugin_api.go`, the webapp selector
+`isAnonymousURLEnabled` that hides the URL editors, and the System Console
+toggle's Enterprise Advanced check.
