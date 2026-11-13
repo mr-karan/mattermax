@@ -451,3 +451,13 @@ see it, without a license. Gates removed: `canEditChannelBanner` in
 `channel_banner.tsx` and `channel_settings_modal.tsx`, and the banner
 permissions in the System Console permissions tree. Classification banners and
 channel attributes stay gated.
+
+### unlock-managed-channel-categories.patch
+
+2026-11-13. Admin-managed sidebar categories (set when creating or editing a
+channel, then shown in members' sidebars) work without a license. Gates
+removed: `getManagedCategories` and the two managed-category checks in
+`patchChannel` in `api4/channel.go`, and `CreateChannel` in `app/channel.go`.
+Still behind upstream's `ManagedChannelCategories` feature flag (default off,
+route registered at startup); enable it with
+`MM_FEATUREFLAGS_MANAGEDCHANNELCATEGORIES=true`.

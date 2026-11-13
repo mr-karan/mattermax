@@ -35,3 +35,4 @@ data-retention.patch
 unlock-user-export.patch
 unlock-lock-teammate-name-display.patch
 unlock-channel-banners.patch
+unlock-managed-channel-categories.patch
