@@ -433,3 +433,11 @@ Removes the Professional check in `app/report.go` (`StartUsersBatchExport`)
 and the upgrade gate in the webapp `system_users_export` component, and drops
 its two now-unused tooltip strings from `en.json`. The export job, CSV worker
 and system-bot delivery are AGPL. System-admin authorization stays.
+
+### unlock-lock-teammate-name-display.patch
+
+2026-11-13. `TeamSettings.LockTeammateNameDisplay` works without a license:
+the admin's teammate name style overrides saved user preferences, and Settings
+> Display shows it as managed by the System Administrator. Gates removed in
+`admin_definition.tsx`, the teammate-name preference selector and the Display
+settings connector. The server already sent the setting without a license.
