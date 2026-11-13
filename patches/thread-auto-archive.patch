@@ -6,7 +6,8 @@ Subject: [PATCH] feat: per-channel thread auto-archive
 Mattermax-Patch: thread-auto-archive.patch
 ---
  .../api4/channel_posting_rules_test.go        | 80 +++++++++++++++-
- server/channels/app/channel_posting_rules.go  | 37 +++++++-
+ server/channels/app/channel_posting_rules.go  | 43 ++++++++-
+ .../app/channel_posting_rules_test.go         | 36 +++++++
  server/i18n/en.json                           | 13 +++
  server/public/model/channel_posting_rules.go  | 14 ++-
  .../channel_settings_moderation_tab.test.tsx  | 17 +++-
@@ -19,15 +20,16 @@ Mattermax-Patch: thread-auto-archive.patch
  .../create_comment.tsx                        |  6 ++
  webapp/channels/src/i18n/en.json              | 16 ++++
  .../types/src/channel_posting_rules.ts        |  1 +
- 14 files changed, 357 insertions(+), 15 deletions(-)
+ 15 files changed, 398 insertions(+), 16 deletions(-)
+ create mode 100644 server/channels/app/channel_posting_rules_test.go
  create mode 100644 webapp/channels/src/components/channel_posting_rules/thread_archived_notice.test.tsx
  create mode 100644 webapp/channels/src/components/channel_posting_rules/thread_archived_notice.tsx
 
 diff --git a/server/channels/api4/channel_posting_rules_test.go b/server/channels/api4/channel_posting_rules_test.go
-index 96ba6a49a745..2d274e04561d 100644
+index 4a4f7103e3df..c4cddc55fd0a 100644
 --- a/server/channels/api4/channel_posting_rules_test.go
 +++ b/server/channels/api4/channel_posting_rules_test.go
-@@ -67,10 +67,11 @@ func TestChannelPostingRulesAPI(t *testing.T) {
+@@ -68,10 +68,11 @@ func TestChannelPostingRulesAPI(t *testing.T) {
  		require.Equal(t, http.StatusForbidden, resp.StatusCode)
  	})
  
@@ -42,7 +44,7 @@ index 96ba6a49a745..2d274e04561d 100644
  	})
  
  	t.Run("an interval outside the allowed options is rejected", func(t *testing.T) {
-@@ -203,3 +204,76 @@ func TestSlowmode(t *testing.T) {
+@@ -291,3 +292,76 @@ func TestSlowmode(t *testing.T) {
  		require.NoError(t, postMessage(th.Client, dm.Id, ""))
  	})
  }
@@ -120,7 +122,7 @@ index 96ba6a49a745..2d274e04561d 100644
 +	})
 +}
 diff --git a/server/channels/app/channel_posting_rules.go b/server/channels/app/channel_posting_rules.go
-index 9118bfa70228..e887580ff6ef 100644
+index 621c35763c11..7d650d611837 100644
 --- a/server/channels/app/channel_posting_rules.go
 +++ b/server/channels/app/channel_posting_rules.go
 @@ -7,6 +7,7 @@ import (
@@ -131,7 +133,16 @@ index 9118bfa70228..e887580ff6ef 100644
  
  	"github.com/mattermost/mattermost/server/public/model"
  	"github.com/mattermost/mattermost/server/public/shared/request"
-@@ -74,7 +75,8 @@ func (a *App) checkChannelPostingRules(rctx request.CTX, post *model.Post, chann
+@@ -65,7 +66,7 @@ func (a *App) SaveChannelPostingRules(channel *model.Channel, rules *model.Chann
+ }
+ 
+ func isChannelPostingRulesError(appErr *model.AppError) bool {
+-	return appErr.Id == "api.post.create_post.slowmode.app_error"
++	return appErr.Id == "api.post.create_post.slowmode.app_error" || appErr.Id == "api.post.create_post.thread_archived.app_error"
+ }
+ 
+ func (a *App) enforceChannelPostingRules(rctx request.CTX, post *model.Post, channel *model.Channel, user *model.User, flags model.CreatePostFlags) (func(), *model.AppError) {
+@@ -97,7 +98,8 @@ func (a *App) checkChannelPostingRules(rctx request.CTX, post *model.Post, chann
  		return appErr
  	}
  
@@ -141,8 +152,8 @@ index 9118bfa70228..e887580ff6ef 100644
  		return nil
  	}
  
-@@ -83,7 +85,38 @@ func (a *App) checkChannelPostingRules(rctx request.CTX, post *model.Post, chann
- 		return appErr
+@@ -105,7 +107,42 @@ func (a *App) checkChannelPostingRules(rctx request.CTX, post *model.Post, chann
+ 		return nil
  	}
  
 -	return a.checkSlowmode(post, channel, rules.SlowmodeSeconds)
@@ -161,7 +172,11 @@ index 9118bfa70228..e887580ff6ef 100644
 +func (a *App) checkThreadArchived(rctx request.CTX, rootID string, archiveDays int) *model.AppError {
 +	root, err := a.Srv().Store().Post().GetSingle(rctx, rootID, false)
 +	if err != nil {
-+		return nil
++		var nfErr *store.ErrNotFound
++		if errors.As(err, &nfErr) {
++			return nil
++		}
++		return model.NewAppError("checkThreadArchived", "app.channel_posting_rules.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 +	}
 +
 +	thread, err := a.Srv().Store().Thread().Get(rootID)
@@ -181,6 +196,48 @@ index 9118bfa70228..e887580ff6ef 100644
  }
  
  func (a *App) checkSlowmode(post *model.Post, channel *model.Channel, slowmodeSeconds int) *model.AppError {
+diff --git a/server/channels/app/channel_posting_rules_test.go b/server/channels/app/channel_posting_rules_test.go
+new file mode 100644
+index 000000000000..dd7bca7c1d0e
+--- /dev/null
++++ b/server/channels/app/channel_posting_rules_test.go
+@@ -0,0 +1,36 @@
++// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
++// See LICENSE.txt for license information.
++
++package app
++
++import (
++	"errors"
++	"net/http"
++	"testing"
++
++	"github.com/stretchr/testify/mock"
++	"github.com/stretchr/testify/require"
++
++	"github.com/mattermost/mattermost/server/v8/channels/store"
++	"github.com/mattermost/mattermost/server/v8/channels/store/storetest/mocks"
++)
++
++func TestCheckThreadArchivedRootLookup(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := SetupWithStoreMock(t)
++
++	mockPostStore := mocks.PostStore{}
++	mockPostStore.On("GetSingle", mock.Anything, "missing", false).Return(nil, store.NewErrNotFound("Post", "missing"))
++	mockPostStore.On("GetSingle", mock.Anything, "unreachable", false).Return(nil, errors.New("connection refused"))
++	th.App.Srv().Store().(*mocks.Store).On("Post").Return(&mockPostStore)
++
++	t.Run("a deleted root lets the reply through", func(t *testing.T) {
++		require.Nil(t, th.App.checkThreadArchived(th.Context, "missing", 1))
++	})
++
++	t.Run("a database error rejects the reply", func(t *testing.T) {
++		appErr := th.App.checkThreadArchived(th.Context, "unreachable", 1)
++		require.NotNil(t, appErr)
++		require.Equal(t, http.StatusInternalServerError, appErr.StatusCode)
++	})
++}
 diff --git a/server/i18n/en.json b/server/i18n/en.json
 index ce304e723042..dbedbb0fbc2e 100644
 --- a/server/i18n/en.json

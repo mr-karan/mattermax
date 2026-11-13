@@ -6,33 +6,34 @@ Subject: [PATCH] feat: opt-in read receipts for direct and group messages
 Mattermax-Patch: read-receipts.patch
 ---
  server/channels/api4/api.go                   |   1 +
- server/channels/api4/read_receipts.go         |  38 +++
- server/channels/api4/read_receipts_test.go    | 276 ++++++++++++++++++
+ server/channels/api4/read_receipts.go         |  38 ++
+ server/channels/api4/read_receipts_test.go    | 382 ++++++++++++++++++
  server/channels/app/channel.go                |   2 +
- server/channels/app/read_receipts.go          | 107 +++++++
+ server/channels/app/preference.go             |  11 +
+ server/channels/app/read_receipts.go          | 157 +++++++
  server/config/client.go                       |   1 +
  server/config/client_test.go                  |  24 ++
  server/public/model/config.go                 |   5 +
- server/public/model/read_receipts.go          |  45 +++
- server/public/model/read_receipts_test.go     |  77 +++++
+ server/public/model/read_receipts.go          |  48 +++
+ server/public/model/read_receipts_test.go     |  86 ++++
  .../admin_console/admin_definition.tsx        |   7 +
- .../admin_definition_read_receipts.test.tsx   |  74 +++++
+ .../admin_definition_read_receipts.test.tsx   |  74 ++++
  .../src/components/post/post_component.tsx    |   5 +
  .../src/components/post_view/post_view.tsx    |   2 +
  .../read_receipts/post_read_receipt.scss      |   8 +
- .../read_receipts/post_read_receipt.test.tsx  | 126 ++++++++
- .../read_receipts/post_read_receipt.tsx       |  89 ++++++
- .../read_receipts/read_receipts_sync.test.tsx | 108 +++++++
- .../read_receipts/read_receipts_sync.tsx      |  56 ++++
- .../components/read_receipts/state.test.ts    | 219 ++++++++++++++
- .../src/components/read_receipts/state.ts     | 176 +++++++++++
- .../display/read_receipts/index.ts            |  34 +++
- .../read_receipts/read_receipts.test.tsx      | 140 +++++++++
- .../display/read_receipts/read_receipts.tsx   | 144 +++++++++
+ .../read_receipts/post_read_receipt.test.tsx  | 126 ++++++
+ .../read_receipts/post_read_receipt.tsx       |  89 ++++
+ .../read_receipts/read_receipts_sync.test.tsx | 108 +++++
+ .../read_receipts/read_receipts_sync.tsx      |  56 +++
+ .../components/read_receipts/state.test.ts    | 219 ++++++++++
+ .../src/components/read_receipts/state.ts     | 176 ++++++++
+ .../display/read_receipts/index.ts            |  34 ++
+ .../read_receipts/read_receipts.test.tsx      | 141 +++++++
+ .../display/read_receipts/read_receipts.tsx   | 144 +++++++
  .../display/user_settings_display.tsx         |   7 +
  webapp/channels/src/i18n/en.json              |  28 ++
  webapp/platform/types/src/config.ts           |   2 +
- 27 files changed, 1801 insertions(+)
+ 28 files changed, 1981 insertions(+)
  create mode 100644 server/channels/api4/read_receipts.go
  create mode 100644 server/channels/api4/read_receipts_test.go
  create mode 100644 server/channels/app/read_receipts.go
@@ -108,10 +109,10 @@ index 000000000000..fd5bf03c67d6
 +}
 diff --git a/server/channels/api4/read_receipts_test.go b/server/channels/api4/read_receipts_test.go
 new file mode 100644
-index 000000000000..3f2d40b33c62
+index 000000000000..10c086892a86
 --- /dev/null
 +++ b/server/channels/api4/read_receipts_test.go
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,382 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -286,7 +287,7 @@ index 000000000000..3f2d40b33c62
 +		older := postReadReceiptMessage(t, client1, dm.Id)
 +		viewReadReceiptChannel(t, client2, dm.Id)
 +
-+		setReadReceiptsPref(t, client2, user2.Id, strconv.FormatInt(model.GetMillis()+1, 10))
++		setReadReceiptsPref(t, client2, user2.Id, "true")
 +		requireReadReceipts(t, client1, dm.Id, 1, map[string]int64{})
 +
 +		time.Sleep(5 * time.Millisecond)
@@ -320,6 +321,112 @@ index 000000000000..3f2d40b33c62
 +
 +	t.Run("system admin who is not a member sees nothing", func(t *testing.T) {
 +		requireReadReceipts(t, th.SystemAdminClient, dm.Id, 0, map[string]int64{})
++	})
++}
++
++func storedReadReceiptsPref(t *testing.T, th *TestHelper, userID string) string {
++	t.Helper()
++	pref, err := th.App.Srv().Store().Preference().Get(userID, model.PreferenceCategoryDisplaySettings, model.PreferenceNameReadReceipts)
++	require.NoError(t, err)
++	return pref.Value
++}
++
++func requireServerStamp(t *testing.T, value string, before, after int64) {
++	t.Helper()
++	stamp, err := strconv.ParseInt(value, 10, 64)
++	require.NoError(t, err, "stored value %q is not a timestamp", value)
++	require.GreaterOrEqual(t, stamp, before)
++	require.LessOrEqual(t, stamp, after)
++}
++
++func TestReadReceiptsPrefServerStamp(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t).InitBasic(t)
++	setReadReceiptsEnabled(th, true)
++
++	user1, user2 := th.BasicUser, th.BasicUser2
++	client1 := th.Client
++	client2 := loggedInClient(t, th, user2)
++	dm := th.CreateDmChannel(t, user2)
++
++	for name, value := range map[string]string{
++		"true":           "true",
++		"far future":     strconv.FormatInt(model.GetMillis()+365*24*time.Hour.Milliseconds(), 10),
++		"past timestamp": "1",
++		"garbage":        "maybe",
++	} {
++		t.Run("turning on with "+name+" stores the server time", func(t *testing.T) {
++			setReadReceiptsPref(t, client2, user2.Id, "false")
++			before := model.GetMillis()
++			setReadReceiptsPref(t, client2, user2.Id, value)
++			requireServerStamp(t, storedReadReceiptsPref(t, th, user2.Id), before, model.GetMillis())
++		})
++	}
++
++	t.Run("re-saving on keeps the floor", func(t *testing.T) {
++		setReadReceiptsPref(t, client2, user2.Id, "false")
++		setReadReceiptsPref(t, client2, user2.Id, "true")
++		floor := storedReadReceiptsPref(t, th, user2.Id)
++
++		time.Sleep(5 * time.Millisecond)
++		setReadReceiptsPref(t, client2, user2.Id, "true")
++		setReadReceiptsPref(t, client2, user2.Id, "1")
++		assert.Equal(t, floor, storedReadReceiptsPref(t, th, user2.Id))
++	})
++
++	t.Run("saving on with no row keeps the default floor", func(t *testing.T) {
++		user3 := th.CreateUser(t)
++		client3 := loggedInClient(t, th, user3)
++		setReadReceiptsPref(t, client3, user3.Id, strconv.FormatInt(model.GetMillis()+time.Hour.Milliseconds(), 10))
++		assert.Equal(t, "0", storedReadReceiptsPref(t, th, user3.Id))
++	})
++
++	t.Run("deleting the preference does not lower the floor", func(t *testing.T) {
++		setReadReceiptsPref(t, client2, user2.Id, "false")
++		before := model.GetMillis()
++		clearReadReceiptsPref(t, client2, user2.Id)
++		requireServerStamp(t, storedReadReceiptsPref(t, th, user2.Id), before, model.GetMillis())
++	})
++
++	t.Run("a client-chosen floor cannot expose reads made while off", func(t *testing.T) {
++		setReadReceiptsPref(t, client2, user2.Id, "false")
++		postReadReceiptMessage(t, client1, dm.Id)
++		viewReadReceiptChannel(t, client2, dm.Id)
++
++		setReadReceiptsPref(t, client2, user2.Id, "1")
++		requireReadReceipts(t, client1, dm.Id, 1, map[string]int64{})
++	})
++
++	t.Run("a far-future floor does not let a reader see receipts while hiding their own", func(t *testing.T) {
++		post := postReadReceiptMessage(t, client2, dm.Id)
++		viewReadReceiptChannel(t, client1, dm.Id)
++		setReadReceiptsPref(t, client2, user2.Id, "false")
++		setReadReceiptsPref(t, client2, user2.Id, strconv.FormatInt(model.GetMillis()+365*24*time.Hour.Milliseconds(), 10))
++
++		requireReadReceipts(t, client2, dm.Id, 1, map[string]int64{user1.Id: post.CreateAt})
++		time.Sleep(5 * time.Millisecond)
++		newer := postReadReceiptMessage(t, client1, dm.Id)
++		viewReadReceiptChannel(t, client2, dm.Id)
++		requireReadReceipts(t, client1, dm.Id, 1, map[string]int64{user2.Id: newer.CreateAt})
++	})
++
++	t.Run("a legacy true value written before the fix exposes nothing", func(t *testing.T) {
++		setReadReceiptsPref(t, client2, user2.Id, "false")
++		old := postReadReceiptMessage(t, client1, dm.Id)
++		viewReadReceiptChannel(t, client2, dm.Id)
++		require.NoError(t, th.App.Srv().Store().Preference().Save(model.Preferences{{
++			UserId:   user2.Id,
++			Category: model.PreferenceCategoryDisplaySettings,
++			Name:     model.PreferenceNameReadReceipts,
++			Value:    "true",
++		}}))
++
++		requireReadReceipts(t, client1, dm.Id, 1, map[string]int64{})
++		requireReadReceipts(t, client2, dm.Id, 1, map[string]int64{})
++
++		setReadReceiptsPref(t, client2, user2.Id, "true")
++		requireReadReceipts(t, client1, dm.Id, 1, map[string]int64{})
++		requireServerStamp(t, storedReadReceiptsPref(t, th, user2.Id), old.CreateAt, model.GetMillis())
 +	})
 +}
 +
@@ -408,12 +515,41 @@ index c58748b17638..a32191dd24cd 100644
  
  	if *a.Config().ServiceSettings.EnableChannelViewedMessages {
  		message := model.NewWebSocketEvent(model.WebsocketEventMultipleChannelsViewed, "", "", userID, nil, "")
+diff --git a/server/channels/app/preference.go b/server/channels/app/preference.go
+index b9f523680730..1c488c2acae7 100644
+--- a/server/channels/app/preference.go
++++ b/server/channels/app/preference.go
+@@ -49,6 +49,11 @@ func (a *App) UpdatePreferences(rctx request.CTX, userID string, preferences mod
+ 		}
+ 	}
+ 
++	preferences, appErr := a.stampReadReceiptsPrefs(userID, preferences)
++	if appErr != nil {
++		return appErr
++	}
++
+ 	if err := a.Srv().Store().Preference().Save(preferences); err != nil {
+ 		var appErr *model.AppError
+ 		switch {
+@@ -96,6 +101,12 @@ func (a *App) DeletePreferences(rctx request.CTX, userID string, preferences mod
+ 	}
+ 
+ 	for _, preference := range preferences {
++		if isReadReceiptsPref(preference) {
++			if appErr := a.resetReadReceiptsPref(userID); appErr != nil {
++				return appErr
++			}
++			continue
++		}
+ 		if err := a.Srv().Store().Preference().Delete(userID, preference.Category, preference.Name); err != nil {
+ 			return model.NewAppError("DeletePreferences", "app.preference.delete.app_error", nil, "", http.StatusBadRequest).Wrap(err)
+ 		}
 diff --git a/server/channels/app/read_receipts.go b/server/channels/app/read_receipts.go
 new file mode 100644
-index 000000000000..9576e64aa75a
+index 000000000000..1c3f2c031f78
 --- /dev/null
 +++ b/server/channels/app/read_receipts.go
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,157 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -421,6 +557,8 @@ index 000000000000..9576e64aa75a
 +
 +import (
 +	"net/http"
++	"slices"
++	"strconv"
 +
 +	"github.com/mattermost/mattermost/server/public/model"
 +	"github.com/mattermost/mattermost/server/public/shared/mlog"
@@ -441,13 +579,14 @@ index 000000000000..9576e64aa75a
 +		return nil, nil, nil, model.NewAppError("loadReadReceiptInputs", "app.channel.get_members.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 +	}
 +
++	now := model.GetMillis()
 +	prefs := make(map[string]model.ReadReceiptsPref, len(members))
 +	for _, m := range members {
 +		pref, err := a.Srv().Store().Preference().Get(m.UserId, model.PreferenceCategoryDisplaySettings, model.PreferenceNameReadReceipts)
 +		if err != nil && !isNotFoundError(err) {
 +			return nil, nil, nil, model.NewAppError("loadReadReceiptInputs", "app.preference.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 +		}
-+		prefs[m.UserId] = model.ParseReadReceiptsPref(pref)
++		prefs[m.UserId] = model.ParseReadReceiptsPref(pref, now)
 +	}
 +
 +	return channel, members, prefs, nil
@@ -521,6 +660,53 @@ index 000000000000..9576e64aa75a
 +		a.Publish(message)
 +	}
 +}
++
++func isReadReceiptsPref(p model.Preference) bool {
++	return p.Category == model.PreferenceCategoryDisplaySettings && p.Name == model.PreferenceNameReadReceipts
++}
++
++func (a *App) readReceiptsOnValue(userID string) (string, *model.AppError) {
++	stored, err := a.Srv().Store().Preference().Get(userID, model.PreferenceCategoryDisplaySettings, model.PreferenceNameReadReceipts)
++	if err != nil && !isNotFoundError(err) {
++		return "", model.NewAppError("readReceiptsOnValue", "app.preference.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++	}
++	now := model.GetMillis()
++	if stored == nil {
++		return "0", nil
++	}
++	if model.ParseReadReceiptsPref(stored, now).On {
++		return stored.Value, nil
++	}
++	return strconv.FormatInt(now, 10), nil
++}
++
++func (a *App) stampReadReceiptsPrefs(userID string, preferences model.Preferences) (model.Preferences, *model.AppError) {
++	stamped := slices.Clone(preferences)
++	for i, p := range stamped {
++		if !isReadReceiptsPref(p) || p.Value == "false" {
++			continue
++		}
++		value, appErr := a.readReceiptsOnValue(userID)
++		if appErr != nil {
++			return nil, appErr
++		}
++		stamped[i].Value = value
++	}
++	return stamped, nil
++}
++
++// A missing row means on since 0, so deleting would expose reads made while off.
++func (a *App) resetReadReceiptsPref(userID string) *model.AppError {
++	value, appErr := a.readReceiptsOnValue(userID)
++	if appErr != nil {
++		return appErr
++	}
++	pref := model.Preference{UserId: userID, Category: model.PreferenceCategoryDisplaySettings, Name: model.PreferenceNameReadReceipts, Value: value}
++	if err := a.Srv().Store().Preference().Save(model.Preferences{pref}); err != nil {
++		return model.NewAppError("resetReadReceiptsPref", "app.preference.save.updating.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++	}
++	return nil
++}
 diff --git a/server/config/client.go b/server/config/client.go
 index 9e882062be2a..811193c83531 100644
 --- a/server/config/client.go
@@ -593,16 +779,19 @@ index a80835f1abd8..9dbef6abc706 100644
  	}
 diff --git a/server/public/model/read_receipts.go b/server/public/model/read_receipts.go
 new file mode 100644
-index 000000000000..7bf96d6cfba3
+index 000000000000..44ddc56be534
 --- /dev/null
 +++ b/server/public/model/read_receipts.go
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,48 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
 +package model
 +
-+import "strconv"
++import (
++	"strconv"
++	"strings"
++)
 +
 +const (
 +	WebsocketEventReadReceipt  WebsocketEventType = "read_receipt"
@@ -620,16 +809,16 @@ index 000000000000..7bf96d6cfba3
 +	Since int64
 +}
 +
-+func ParseReadReceiptsPref(p *Preference) ReadReceiptsPref {
++func ParseReadReceiptsPref(p *Preference, now int64) ReadReceiptsPref {
 +	if p == nil {
 +		return ReadReceiptsPref{On: true}
 +	}
-+	if p.Value == "false" {
++	if p.Value == "" || strings.Trim(p.Value, "0123456789") != "" {
 +		return ReadReceiptsPref{}
 +	}
 +	since, err := strconv.ParseInt(p.Value, 10, 64)
-+	if err != nil || since < 0 {
-+		return ReadReceiptsPref{On: true}
++	if err != nil || since > now {
++		return ReadReceiptsPref{}
 +	}
 +	return ReadReceiptsPref{On: true, Since: since}
 +}
@@ -644,10 +833,10 @@ index 000000000000..7bf96d6cfba3
 +}
 diff --git a/server/public/model/read_receipts_test.go b/server/public/model/read_receipts_test.go
 new file mode 100644
-index 000000000000..369caf2181ea
+index 000000000000..a28d706ef904
 --- /dev/null
 +++ b/server/public/model/read_receipts_test.go
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,86 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -707,6 +896,7 @@ index 000000000000..369caf2181ea
 +}
 +
 +func TestParseReadReceiptsPref(t *testing.T) {
++	const now = int64(1762934400000)
 +	for _, tc := range []struct {
 +		name string
 +		pref *Preference
@@ -714,14 +904,22 @@ index 000000000000..369caf2181ea
 +	}{
 +		{"no row", nil, ReadReceiptsPref{On: true}},
 +		{"false", &Preference{Value: "false"}, ReadReceiptsPref{}},
-+		{"true", &Preference{Value: "true"}, ReadReceiptsPref{On: true}},
-+		{"junk", &Preference{Value: "maybe"}, ReadReceiptsPref{On: true}},
-+		{"empty", &Preference{Value: ""}, ReadReceiptsPref{On: true}},
-+		{"negative", &Preference{Value: "-5"}, ReadReceiptsPref{On: true}},
-+		{"timestamp", &Preference{Value: "1762934400000"}, ReadReceiptsPref{On: true, Since: 1762934400000}},
++		{"true", &Preference{Value: "true"}, ReadReceiptsPref{}},
++		{"junk", &Preference{Value: "maybe"}, ReadReceiptsPref{}},
++		{"empty", &Preference{Value: ""}, ReadReceiptsPref{}},
++		{"negative", &Preference{Value: "-5"}, ReadReceiptsPref{}},
++		{"signed", &Preference{Value: "+5"}, ReadReceiptsPref{}},
++		{"decimal", &Preference{Value: "1.5"}, ReadReceiptsPref{}},
++		{"padded", &Preference{Value: " 5"}, ReadReceiptsPref{}},
++		{"overflow", &Preference{Value: "99999999999999999999"}, ReadReceiptsPref{}},
++		{"future", &Preference{Value: "1762934400001"}, ReadReceiptsPref{}},
++		{"far future", &Preference{Value: "9223372036854775807"}, ReadReceiptsPref{}},
++		{"zero", &Preference{Value: "0"}, ReadReceiptsPref{On: true}},
++		{"past", &Preference{Value: "1762934399999"}, ReadReceiptsPref{On: true, Since: 1762934399999}},
++		{"now", &Preference{Value: "1762934400000"}, ReadReceiptsPref{On: true, Since: now}},
 +	} {
 +		t.Run(tc.name, func(t *testing.T) {
-+			assert.Equal(t, tc.want, ParseReadReceiptsPref(tc.pref))
++			assert.Equal(t, tc.want, ParseReadReceiptsPref(tc.pref, now))
 +		})
 +	}
 +}
@@ -1732,10 +1930,10 @@ index 000000000000..73937164db57
 +export default connect(mapStateToProps, mapDispatchToProps)(ReadReceipts);
 diff --git a/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.test.tsx b/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.test.tsx
 new file mode 100644
-index 000000000000..4ab2435a442d
+index 000000000000..2fd69cfba135
 --- /dev/null
 +++ b/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.test.tsx
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,141 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -1854,17 +2052,18 @@ index 000000000000..4ab2435a442d
 +        expect(updateSection).toHaveBeenCalledWith('');
 +    });
 +
-+    test('saving On stores the time it was turned back on', async () => {
-+        const before = Date.now();
++    test('saving On stores true and leaves the time to the server', async () => {
 +        const {savePreferences} = renderOpen('false');
 +
 +        await userEvent.click(screen.getByLabelText('On'));
 +        await userEvent.click(screen.getByRole('button', {name: 'Save'}));
 +
-+        expect(savePreferences).toHaveBeenCalledTimes(1);
-+        const value = savePreferences.mock.calls[0][1][0].value;
-+        expect(value).toMatch(/^\d+$/);
-+        expect(Number(value)).toBeGreaterThanOrEqual(before);
++        expect(savePreferences).toHaveBeenCalledWith(user.id, [{
++            user_id: user.id,
++            category: 'display_settings',
++            name: 'read_receipts',
++            value: 'true',
++        }]);
 +    });
 +
 +    test('saving without a change stores nothing', async () => {
@@ -1878,7 +2077,7 @@ index 000000000000..4ab2435a442d
 +});
 diff --git a/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.tsx b/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.tsx
 new file mode 100644
-index 000000000000..23aa1e373e71
+index 000000000000..f723eda9c7a3
 --- /dev/null
 +++ b/webapp/channels/src/components/user_settings/display/read_receipts/read_receipts.tsx
 @@ -0,0 +1,144 @@
@@ -1947,7 +2146,7 @@ index 000000000000..23aa1e373e71
 +                user_id: user.id,
 +                category: Preferences.CATEGORY_DISPLAY_SETTINGS,
 +                name: PREFERENCE_NAME_READ_RECEIPTS,
-+                value: value === 'off' ? 'false' : String(Date.now()),
++                value: String(value === 'on'),
 +            }]);
 +        }
 +        updateSection('');

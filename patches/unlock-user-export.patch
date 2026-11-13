@@ -5,19 +5,54 @@ Subject: [PATCH] feat: user list CSV export without a license
 
 Mattermax-Patch: unlock-user-export.patch
 ---
- server/channels/app/report.go                 |  4 --
- server/channels/app/report_test.go            | 38 +++++++++++++++
- .../system_users_export/index.test.tsx        | 48 +++++++++++++++++++
- .../system_users_export/index.tsx             | 36 +-------------
- webapp/channels/src/i18n/en.json              |  8 ----
- 5 files changed, 87 insertions(+), 47 deletions(-)
+ server/channels/app/report.go                 | 18 +++--
+ server/channels/app/report_test.go            | 72 +++++++++++++++++++
+ .../system_users_export/index.test.tsx        | 48 +++++++++++++
+ .../system_users_export/index.tsx             | 36 +---------
+ webapp/channels/src/i18n/en.json              |  8 ---
+ 5 files changed, 134 insertions(+), 48 deletions(-)
  create mode 100644 webapp/channels/src/components/admin_console/system_users/system_users_export/index.test.tsx
 
 diff --git a/server/channels/app/report.go b/server/channels/app/report.go
-index 23cfd7af4ead..b68d1a51822d 100644
+index 23cfd7af4ead..e748be4ef6dc 100644
 --- a/server/channels/app/report.go
 +++ b/server/channels/app/report.go
-@@ -201,10 +201,6 @@ func (a *App) GetUserCountForReport(filter *model.UserReportOptions) (*int64, *m
+@@ -10,6 +10,7 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 	"strconv"
++	"strings"
+ 
+ 	"github.com/mattermost/mattermost/server/public/model"
+ 	"github.com/mattermost/mattermost/server/public/shared/i18n"
+@@ -31,7 +32,7 @@ func (a *App) saveCSVChunk(prefix string, count int, reportData []model.Reportab
+ 	w := csv.NewWriter(&buf)
+ 
+ 	for _, report := range reportData {
+-		err := w.Write(report.ToReport())
++		err := w.Write(escapeCSVFormulas(report.ToReport()))
+ 		if err != nil {
+ 			return model.NewAppError("saveCSVChunk", "app.save_csv_chunk.write_error", nil, "", http.StatusInternalServerError).Wrap(err)
+ 		}
+@@ -45,6 +46,17 @@ func (a *App) saveCSVChunk(prefix string, count int, reportData []model.Reportab
+ 	return appErr
+ }
+ 
++func escapeCSVFormulas(row []string) []string {
++	escaped := make([]string, len(row))
++	for i, cell := range row {
++		if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
++			cell = "'" + cell
++		}
++		escaped[i] = cell
++	}
++	return escaped
++}
++
+ func (a *App) CompileReportChunks(format string, prefix string, numberOfChunks int, headers []string) *model.AppError {
+ 	switch format {
+ 	case "csv":
+@@ -201,10 +213,6 @@ func (a *App) GetUserCountForReport(filter *model.UserReportOptions) (*int64, *m
  }
  
  func (a *App) StartUsersBatchExport(rctx request.CTX, ro *model.UserReportOptions, startAt int64, endAt int64) *model.AppError {
@@ -29,7 +64,7 @@ index 23cfd7af4ead..b68d1a51822d 100644
  		"requesting_user_id": rctx.Session().UserId,
  		"date_range":         ro.DateRange,
 diff --git a/server/channels/app/report_test.go b/server/channels/app/report_test.go
-index 81f13a7ca76b..3eb67247be06 100644
+index 81f13a7ca76b..57c84708cbbc 100644
 --- a/server/channels/app/report_test.go
 +++ b/server/channels/app/report_test.go
 @@ -4,12 +4,15 @@
@@ -48,7 +83,7 @@ index 81f13a7ca76b..3eb67247be06 100644
  	"github.com/stretchr/testify/require"
  )
  
-@@ -321,3 +324,38 @@ func TestStartUsersBatchExport(t *testing.T) {
+@@ -321,3 +324,72 @@ func TestStartUsersBatchExport(t *testing.T) {
  		require.Equal(t, "app.report.start_users_batch_export.job_exists", appErr.Id)
  	})
  }
@@ -86,6 +121,40 @@ index 81f13a7ca76b..3eb67247be06 100644
 +	require.Equal(t, th.BasicUser.Id, rows[1][0])
 +	require.Equal(t, th.BasicUser.Username, rows[1][1])
 +	require.Equal(t, th.BasicUser.Email, rows[1][2])
++}
++
++func TestSaveCSVChunkEscapesFormulas(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t)
++	prefix := model.NewId()
++	var reports []model.ReportableObject
++	for _, trigger := range []string{"=", "+", "-", "@", "\t", "\r"} {
++		reports = append(reports, &model.UserReport{
++			User: model.User{
++				Id:        trigger + "id",
++				Username:  trigger + "username",
++				Email:     trigger + "user@example.com",
++				FirstName: trigger + "first",
++				LastName:  "last",
++			},
++			Teams: trigger + "team",
++		})
++	}
++	reports = append(reports, &model.UserReport{User: model.User{Id: "plain", Username: "user-name", Email: "a=b@example.com"}})
++	require.Nil(t, th.App.SaveReportChunk("csv", prefix, 0, reports))
++	data, appErr := th.App.ReadFile(makeFilePath(prefix, 0, "csv"))
++	require.Nil(t, appErr)
++	rows, err := csv.NewReader(bytes.NewReader(data)).ReadAll()
++	require.NoError(t, err)
++	require.Len(t, rows, 7)
++	for i, trigger := range []string{"=", "+", "-", "@", "\t", "\r"} {
++		require.Equal(t, "'"+trigger+"id", rows[i][0])
++		require.Equal(t, "'"+trigger+"username", rows[i][1])
++		require.Equal(t, "'"+trigger+"user@example.com", rows[i][2])
++		require.Equal(t, "'"+trigger+"first last", rows[i][4])
++		require.Equal(t, "'"+trigger+"team", rows[i][12])
++	}
++	require.Equal(t, []string{"plain", "user-name", "a=b@example.com"}, rows[6][:3])
 +}
 diff --git a/webapp/channels/src/components/admin_console/system_users/system_users_export/index.test.tsx b/webapp/channels/src/components/admin_console/system_users/system_users_export/index.test.tsx
 new file mode 100644

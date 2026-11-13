@@ -239,12 +239,13 @@ gains the provider, the hint and Enter handling. No server change.
 
 2026-11-13. Add "Quote reply" (shortcut Q) to the post menu. It inserts a
 Markdown quote of the post (first 5 lines, "[attachment]" when files are
-attached), credited to the author's display name, with a link to the
-original, into the channel's composer, or the thread's composer in a thread,
-and focuses it without opening a thread. New files under
-`components/quote_reply/`; `advanced_text_editor.tsx` registers its composer
-with one hook call, and `dot_menu` adds the item and shortcut. No server
-change.
+attached), credited to the author's display name, with a link to the original,
+into the channel's composer, or the thread's composer in a thread, and focuses
+it without opening a thread. New files under `components/quote_reply/`;
+`advanced_text_editor.tsx` registers its composer with one hook call, and
+`dot_menu` adds the item and shortcut. No server change. The author name is
+Markdown-escaped and its newlines become spaces before it goes into the
+attribution line.
 
 ### voice-messages.patch
 
@@ -257,7 +258,11 @@ keyed by file id, and those files get an inline player with a seekable
 waveform and 1x/1.5x/2x speed. The button follows `EnableFileAttachments` and
 the `upload_file` permission. New files under `components/voice_message/`;
 small edits in `advanced_text_editor` and `file_attachment_list`. No server,
-schema or config change; mobile apps show a normal audio attachment.
+schema or config change; mobile apps show a normal audio attachment. The
+inline player renders only when the attachment's `mime_type` starts with
+`audio/`; any other file listed in `voice_messages` keeps its normal
+attachment card. The WebM fallback saves recordings as `.weba`, so the server
+stores `audio/webm`.
 
 ### read-receipts.patch
 
@@ -265,10 +270,14 @@ schema or config change; mobile apps show a normal audio attachment.
 switch, `TeamSettings.EnableReadReceipts` (off by default), and a personal
 Settings > Display toggle (on by default) stored as the
 `display_settings`/`read_receipts` preference. Turning receipts off is
-reciprocal: that user neither sends nor sees receipts, and turning them back
-on records the time, so reads made while off stay private. A receipt is the
-other member's existing `ChannelMembers.LastViewedAt`, so there is no
-migration. One rule, `model.ReadReceiptVisible`, gates both the new
+reciprocal: that user neither sends nor sees receipts. The client sends only
+"false" or "true"; `App.UpdatePreferences` stores the server's own time when
+receipts are turned back on (keeping the existing time if they were already
+on), and deleting the preference does the same instead of resetting it, so
+reads made while off stay private. Any stored value other than "false", no
+row, or a past server time counts as off. A receipt is the other member's
+existing `ChannelMembers.LastViewedAt`, so there is no migration. One rule,
+`model.ReadReceiptVisible`, gates both the new
 `GET /api/v4/channels/{id}/read_receipts` endpoint and the new
 `read_receipt` websocket event. The web app shows "Seen" or "Seen by N" under
 your newest message. Other members' last-viewed times stay hidden everywhere
@@ -279,21 +288,32 @@ else. Mobile apps ignore the event.
 2026-11-13. Per-channel slowmode (Off, 5s, 10s, 30s, 1m, 5m, 15m, 1h), set by
 channel, team or system admins in a new Moderation tab of channel settings.
 Stored as a Systems row `channel_posting_rules_<channelId>`, served by
-`GET/PUT /api/v4/channels/{id}/posting_rules`. Enforced in
-`CreatePostAsUserWithFlags` (`app/post.go`, one call) with HTTP 429 and the
-seconds left. Deleted posts still count, so deleting your last post does not
-reset the wait. Admins, bots, webhook and system posts, and DMs/GMs are
-exempt. The web app shows an indicator and a countdown notice at the composer.
-Mobile apps get the server's error text.
+`GET/PUT /api/v4/channels/{id}/posting_rules`, and cached in memory with the
+cache entry dropped on save. Enforced in `App.CreatePost`
+(`app/channel_posting_rules.go`), so the API, built-in slash commands (`/me`,
+`/shrug`, `/echo`) and scheduled posts all follow it, with HTTP 429 and the
+seconds left; slash commands show that message instead of a generic failure.
+A scheduled post that would break slowmode at send time fails with "Unable to
+Send" and its author is notified. Concurrent posts are serialized per channel
+and user with an in-process lock while slowmode is on, which assumes a single
+node (Mattermax does not unlock clustering). Deleted posts still count, so
+deleting your last post does not reset the wait. Exempt: channel, team and
+system admins, bots, incoming webhooks and webhook-style command responses,
+plugin posts, system messages, and DMs/GMs. The web app shows an indicator and
+a countdown notice at the composer. Mobile apps get the server's error text.
 
 ### thread-auto-archive.patch
 
 2026-11-13. Per-channel thread auto-archive (Off, 1, 3, 7, 30 days without
 replies), in the same Moderation tab and the same Systems row as slowmode.
-Checked at reply time from max(root `CreateAt`, `Threads.LastReplyAt`), with
-no background job. Late replies are rejected with HTTP 403. Channel admins and
-above can still reply, which reopens the thread. Root posts and reactions are
-unaffected. The thread view shows an archived notice instead of the reply box
+Checked in `App.CreatePost` at reply time from max(root `CreateAt`,
+`Threads.LastReplyAt`), with no background job, so the same paths and
+exemptions as slowmode apply and a scheduled reply to an archived thread
+fails with "Unable to Send". Late replies are rejected with HTTP 403. Channel
+admins and above can still reply, which reopens the thread. A reply to a
+deleted root is left to the post layer, but a database error while looking up
+the root rejects the reply. Root posts and reactions are unaffected. The
+thread view shows an archived notice instead of the reply box
 (`create_comment.tsx`, +6).
 
 ### unlock-content-flagging.patch
@@ -340,9 +360,10 @@ show settings that do nothing. Intune MAM stays gated.
 ### unlock-enforce-mfa.patch
 
 2026-11-13. Admins can require multi-factor authentication for all users
-(`ServiceSettings.EnforceMultifactorAuthentication`) without a license, and
-guest enforcement (`GuestAccountsSettings.EnforceMultifactorAuthentication`)
-takes effect too. Gates removed: `CheckUserMfa` in `app/authentication.go`,
+(`ServiceSettings.EnforceMultifactorAuthentication`) without a license. As
+upstream, the guest setting (`GuestAccountsSettings.EnforceMultifactorAuthentication`)
+only applies while global enforcement is on: it decides whether guests are
+included, and does not enforce MFA on its own. Gates removed: `CheckUserMfa` in `app/authentication.go`,
 the licensed-only client config prop in `config/client.go`, the System Console
 setting, and the webapp MFA-required redirect checks (`utils/route.tsx`,
 logged_in, team_controller, mfa_controller, the MFA settings section). TOTP
@@ -374,8 +395,9 @@ selector, the System Console page and its enable toggle.
 Logging page is visible, and `ExperimentalAuditSettings.AdvancedLoggingJSON`
 targets load alongside basic file auditing. The same `AdvancedLogging` license
 feature also gated the main server log, so `LogSettings` advanced targets are
-no longer stripped when unlicensed (`RemoveUnlicensedLogTargets` deleted): a
-server that already lists advanced targets starts writing to them. Gates
+no longer stripped when unlicensed (`RemoveUnlicensedLogTargets` deleted).
+Release note: on upgrade, a server whose config already lists advanced log or
+audit targets (TCP, syslog, extra files) starts writing to them. Gates
 removed in `app/audit.go`, `app/server.go`, `app/delivery_tracking_config.go`,
 `app/platform/log.go`, `config/logger.go`, `config/client.go`
 (`AuditLoggingActive`) and `admin_definition.tsx`. The audit certificate
@@ -414,15 +436,29 @@ and the deletion job. Upstream ships the API, store and console in AGPL code
 but leaves the policy service and the deletion job to enterprise code; this
 patch adds clean-room versions in `app/data_retention_policies.go`,
 `app/data_retention_job.go` and `jobs/data_retention/`, plus store methods in
-new sqlstore files. Nothing is deleted by default, and scheduled runs stay
-paused until an admin's manual run completes: only a job created through the
-API by an authenticated admin carries `trigger=manual`, and only that arms the
-schedule (Systems row `MattermaxDataRetentionArmedBy`). `CopyFileInfos` now
-copies through `FileInfoStore.SaveCopy`, which locks the live source row, so a
-copy can never lose its bytes to a concurrent retention run. Small upstream
-edits: `app/job.go`, `app/file.go`, `thread_store.go` (`DeleteOrphanedRows`
-deletes only the selected rows), `store.go` and the generated layers. License
-gates removed in `app/data_retention.go`, `config/client.go` and
+new sqlstore files. As upstream, the global message policy also deletes direct
+and group messages; custom policies cannot include them. When the job deletes
+a post it also removes the post's attachments, thumbnails and previews from
+file storage, with or without file retention (bytes before rows, retried on
+the next run if storage fails; a path still used by a `CopyFileInfos` copy
+keeps its bytes); file retention still removes old files of kept posts.
+Nothing is deleted by default, and scheduled runs stay paused until an admin's
+manual run completes: only a job created through the API by an authenticated
+admin carries `trigger=manual`, and only that arms the schedule (Systems row
+`MattermaxDataRetentionArmedBy`, which records the settings that run used).
+The schedule pauses again until the next manual run whenever retention gets
+stricter than that: message or file deletion turned on or shortened, Preserve
+Pinned Posts turned off, or a custom policy change that makes a team or
+channel keep posts for less time (a shorter policy period, a team or channel
+added to a policy shorter than what applied to it, or removed from or deleted
+with a policy longer than the team policy or global period it falls back to).
+Changes that only keep data longer never pause it, and a scheduled run stops
+if retention gets stricter mid-run. `CopyFileInfos` now copies through
+`FileInfoStore.SaveCopy`, which locks the live source row, so a copy can never
+lose its bytes to a concurrent retention run. Small upstream edits:
+`app/job.go`, `app/file.go`, `thread_store.go` (`DeleteOrphanedRows` deletes
+only the selected rows), `store.go` and the generated layers. License gates
+removed in `app/data_retention.go`, `config/client.go` and
 `admin_definition.tsx`. Not covered in v1: recaps, abandoned unattached
 uploads, audits, legal hold.
 
@@ -432,7 +468,9 @@ uploads, audits, legal hold.
 Removes the Professional check in `app/report.go` (`StartUsersBatchExport`)
 and the upgrade gate in the webapp `system_users_export` component, and drops
 its two now-unused tooltip strings from `en.json`. The export job, CSV worker
-and system-bot delivery are AGPL. System-admin authorization stays.
+and system-bot delivery are AGPL. System-admin authorization stays. Cells
+starting with `=`, `+`, `-`, `@`, tab or carriage return are prefixed with `'`
+at the CSV writer (`saveCSVChunk`) to prevent formula injection.
 
 ### unlock-lock-teammate-name-display.patch
 

@@ -6,37 +6,42 @@ Subject: [PATCH] feat: per-channel slowmode
 Mattermax-Patch: slowmode.patch
 ---
  server/channels/api4/api.go                   |   1 +
- server/channels/api4/channel_posting_rules.go |  84 +++++++
- .../api4/channel_posting_rules_test.go        | 205 ++++++++++++++++++
- server/channels/app/channel_posting_rules.go  | 103 +++++++++
- server/channels/app/post.go                   |   4 +
+ server/channels/api4/channel_posting_rules.go |  84 +++++
+ .../api4/channel_posting_rules_test.go        | 293 ++++++++++++++++++
+ server/channels/app/channel_posting_rules.go  | 125 ++++++++
+ server/channels/app/command.go                |   4 +
+ server/channels/app/keyed_mutex.go            |  41 +++
+ server/channels/app/post.go                   |   6 +
+ server/channels/app/scheduled_post_job.go     |   3 +
+ server/channels/app/server.go                 |  10 +
  .../channels/store/retrylayer/retrylayer.go   |  21 ++
- server/channels/store/sqlstore/post_store.go  |  16 ++
+ server/channels/store/sqlstore/post_store.go  |  16 +
  server/channels/store/store.go                |   1 +
- .../store/storetest/mocks/PostStore.go        |  28 +++
- .../channels/store/timerlayer/timerlayer.go   |  16 ++
- server/i18n/en.json                           |  25 +++
- server/public/model/channel_posting_rules.go  |  28 +++
+ .../store/storetest/mocks/PostStore.go        |  28 ++
+ .../channels/store/timerlayer/timerlayer.go   |  16 +
+ server/i18n/en.json                           |  25 ++
+ server/public/model/channel_posting_rules.go  |  28 ++
  .../advanced_text_editor.tsx                  |   7 +-
  .../post_box_indicator/post_box_indicator.tsx |   2 +
- .../channel_settings_moderation_tab.scss      |  29 +++
- .../channel_settings_moderation_tab.test.tsx  |  75 +++++++
- .../channel_settings_moderation_tab.tsx       | 145 +++++++++++++
- ...ettings_moderation_tab_visibility.test.tsx |  73 +++++++
- .../posting_rules_options.ts                  |  29 +++
- .../channel_posting_rules/slowmode.test.tsx   | 161 ++++++++++++++
- .../slowmode_indicator.scss                   |  16 ++
- .../slowmode_indicator.tsx                    |  38 ++++
- .../use_channel_posting_rules.ts              |  45 ++++
- .../channel_posting_rules/use_slowmode.tsx    |  92 ++++++++
+ .../channel_settings_moderation_tab.scss      |  29 ++
+ .../channel_settings_moderation_tab.test.tsx  |  75 +++++
+ .../channel_settings_moderation_tab.tsx       | 145 +++++++++
+ ...ettings_moderation_tab_visibility.test.tsx |  73 +++++
+ .../posting_rules_options.ts                  |  29 ++
+ .../channel_posting_rules/slowmode.test.tsx   | 161 ++++++++++
+ .../slowmode_indicator.scss                   |  16 +
+ .../slowmode_indicator.tsx                    |  38 +++
+ .../use_channel_posting_rules.ts              |  45 +++
+ .../channel_posting_rules/use_slowmode.tsx    |  92 ++++++
  .../channel_settings_modal.tsx                |  19 ++
- webapp/channels/src/i18n/en.json              |  40 ++++
- webapp/platform/client/src/client4.ts         |  15 ++
+ webapp/channels/src/i18n/en.json              |  40 +++
+ webapp/platform/client/src/client4.ts         |  15 +
  .../types/src/channel_posting_rules.ts        |   6 +
- 28 files changed, 1322 insertions(+), 2 deletions(-)
+ 32 files changed, 1492 insertions(+), 2 deletions(-)
  create mode 100644 server/channels/api4/channel_posting_rules.go
  create mode 100644 server/channels/api4/channel_posting_rules_test.go
  create mode 100644 server/channels/app/channel_posting_rules.go
+ create mode 100644 server/channels/app/keyed_mutex.go
  create mode 100644 server/public/model/channel_posting_rules.go
  create mode 100644 webapp/channels/src/components/channel_posting_rules/channel_settings_moderation_tab.scss
  create mode 100644 webapp/channels/src/components/channel_posting_rules/channel_settings_moderation_tab.test.tsx
@@ -154,10 +159,10 @@ index 000000000000..09cbe6cb7598
 +}
 diff --git a/server/channels/api4/channel_posting_rules_test.go b/server/channels/api4/channel_posting_rules_test.go
 new file mode 100644
-index 000000000000..96ba6a49a745
+index 000000000000..4a4f7103e3df
 --- /dev/null
 +++ b/server/channels/api4/channel_posting_rules_test.go
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,293 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -168,6 +173,7 @@ index 000000000000..96ba6a49a745
 +	"encoding/json"
 +	"net/http"
 +	"strings"
++	"sync"
 +	"testing"
 +
 +	"github.com/stretchr/testify/require"
@@ -239,11 +245,56 @@ index 000000000000..96ba6a49a745
 +		require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 +	})
 +
++	t.Run("rules are cached and a save takes effect on the next post", func(t *testing.T) {
++		channel := th.CreatePublicChannel(t)
++		_, client := newChannelMemberClient(t, th, channel)
++		require.Equal(t, model.ChannelPostingRules{}, fetchChannelPostingRules(t, client, channel.Id))
++
++		_, err := storeChannelPostingRules(t, th.Client, channel.Id, model.ChannelPostingRules{SlowmodeSeconds: 60})
++		require.NoError(t, err)
++		require.NoError(t, postMessage(client, channel.Id, ""))
++		CheckErrorID(t, postMessage(client, channel.Id, ""), "api.post.create_post.slowmode.app_error")
++
++		_, err = storeChannelPostingRules(t, th.Client, channel.Id, model.ChannelPostingRules{})
++		require.NoError(t, err)
++		require.NoError(t, postMessage(client, channel.Id, ""))
++
++		require.NoError(t, th.App.Srv().Store().System().SaveOrUpdate(&model.System{Name: "channel_posting_rules_" + channel.Id, Value: `{"slowmode_seconds":60}`}))
++		require.NoError(t, postMessage(client, channel.Id, ""))
++	})
++
 +	t.Run("rules cannot be set on a direct message", func(t *testing.T) {
 +		dm := th.CreateDmChannel(t, th.BasicUser2)
 +		_, err := storeChannelPostingRules(t, th.SystemAdminClient, dm.Id, model.ChannelPostingRules{SlowmodeSeconds: 30})
 +		CheckErrorID(t, err, "app.channel_posting_rules.dm_gm.app_error")
 +	})
++}
++
++func TestSlowmodeConcurrentPosts(t *testing.T) {
++	mainHelper.Parallel(t)
++	th := Setup(t).InitBasic(t)
++
++	channel := th.CreatePublicChannel(t)
++	_, err := storeChannelPostingRules(t, th.Client, channel.Id, model.ChannelPostingRules{SlowmodeSeconds: 60})
++	require.NoError(t, err)
++	_, client := newChannelMemberClient(t, th, channel)
++
++	errs := make([]error, 10)
++	var wg sync.WaitGroup
++	for i := range errs {
++		wg.Go(func() { errs[i] = postMessage(client, channel.Id, "") })
++	}
++	wg.Wait()
++
++	succeeded := 0
++	for _, err := range errs {
++		if err == nil {
++			succeeded++
++			continue
++		}
++		CheckErrorID(t, err, "api.post.create_post.slowmode.app_error")
++	}
++	require.Equal(t, 1, succeeded)
 +}
 +
 +func TestSlowmode(t *testing.T) {
@@ -356,6 +407,48 @@ index 000000000000..96ba6a49a745
 +		}
 +	})
 +
++	t.Run("built-in slash commands such as /me are slowed down", func(t *testing.T) {
++		_, client := newChannelMemberClient(t, th, channel)
++		require.NoError(t, postMessage(client, channel.Id, ""))
++		_, _, err := client.ExecuteCommand(context.Background(), channel.Id, "/me waves")
++		CheckErrorID(t, err, "api.post.create_post.slowmode.app_error")
++	})
++
++	t.Run("CreatePostMissingChannel, which /echo posts through, is slowed down", func(t *testing.T) {
++		user, client := newChannelMemberClient(t, th, channel)
++		require.NoError(t, postMessage(client, channel.Id, ""))
++		_, _, appErr := th.App.CreatePostMissingChannel(th.Context, &model.Post{ChannelId: channel.Id, UserId: user.Id, Message: "echo"}, true, true)
++		require.NotNil(t, appErr)
++		require.Equal(t, "api.post.create_post.slowmode.app_error", appErr.Id)
++	})
++
++	t.Run("a scheduled post that would break slowmode fails as unable to send", func(t *testing.T) {
++		user, _ := newChannelMemberClient(t, th, channel)
++		for range 2 {
++			_, err := th.App.Srv().Store().ScheduledPost().CreateScheduledPost(th.Context, &model.ScheduledPost{
++				Draft:       model.Draft{CreateAt: model.GetMillis(), UserId: user.Id, ChannelId: channel.Id, Message: "scheduled"},
++				ScheduledAt: model.GetMillis() - 1000,
++			})
++			require.NoError(t, err)
++		}
++
++		th.App.ProcessScheduledPosts(th.Context)
++
++		remaining, err := th.App.Srv().Store().ScheduledPost().GetScheduledPostsForUser(th.Context, user.Id, th.BasicTeam.Id)
++		require.NoError(t, err)
++		require.Len(t, remaining, 1)
++		require.Equal(t, model.ScheduledPostErrorUnableToSend, remaining[0].ErrorCode)
++	})
++
++	t.Run("system messages and plugin posts are exempt", func(t *testing.T) {
++		user, client := newChannelMemberClient(t, th, channel)
++		require.NoError(t, postMessage(client, channel.Id, ""))
++		_, _, appErr := th.App.CreatePost(th.Context, &model.Post{ChannelId: channel.Id, UserId: user.Id, Type: model.PostTypeHeaderChange, Message: "header"}, channel, model.CreatePostFlags{})
++		require.Nil(t, appErr)
++		_, _, appErr = th.App.CreatePost(th.Context, &model.Post{ChannelId: channel.Id, UserId: user.Id, Message: "plugin"}, channel, model.CreatePostFlags{FromPlugin: true})
++		require.Nil(t, appErr)
++	})
++
 +	t.Run("direct messages are never slowed down", func(t *testing.T) {
 +		dm := th.CreateDmChannel(t, th.BasicUser2)
 +		require.NoError(t, th.App.Srv().Store().System().SaveOrUpdate(&model.System{Name: "channel_posting_rules_" + dm.Id, Value: `{"slowmode_seconds":60}`}))
@@ -365,10 +458,10 @@ index 000000000000..96ba6a49a745
 +}
 diff --git a/server/channels/app/channel_posting_rules.go b/server/channels/app/channel_posting_rules.go
 new file mode 100644
-index 000000000000..9118bfa70228
+index 000000000000..621c35763c11
 --- /dev/null
 +++ b/server/channels/app/channel_posting_rules.go
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,125 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
 +
@@ -387,17 +480,25 @@ index 000000000000..9118bfa70228
 +const channelPostingRulesKeyPrefix = "channel_posting_rules_"
 +
 +func (a *App) GetChannelPostingRules(channelID string) (*model.ChannelPostingRules, *model.AppError) {
-+	rules := &model.ChannelPostingRules{}
-+	system, err := a.Srv().Store().System().GetByName(channelPostingRulesKeyPrefix + channelID)
-+	if err != nil {
-+		var nfErr *store.ErrNotFound
-+		if errors.As(err, &nfErr) {
-+			return rules, nil
-+		}
-+		return nil, model.NewAppError("GetChannelPostingRules", "app.channel_posting_rules.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++	var cached model.ChannelPostingRules
++	if err := a.Srv().channelPostingRulesCache.Get(channelID, &cached); err == nil {
++		return &cached, nil
 +	}
 +
-+	if err := json.Unmarshal([]byte(system.Value), rules); err != nil {
++	rules := &model.ChannelPostingRules{}
++	system, err := a.Srv().Store().System().GetByName(channelPostingRulesKeyPrefix + channelID)
++	var nfErr *store.ErrNotFound
++	switch {
++	case errors.As(err, &nfErr):
++	case err != nil:
++		return nil, model.NewAppError("GetChannelPostingRules", "app.channel_posting_rules.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++	default:
++		if err := json.Unmarshal([]byte(system.Value), rules); err != nil {
++			return nil, model.NewAppError("GetChannelPostingRules", "app.channel_posting_rules.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++		}
++	}
++
++	if err := a.Srv().channelPostingRulesCache.SetWithDefaultExpiry(channelID, rules); err != nil {
 +		return nil, model.NewAppError("GetChannelPostingRules", "app.channel_posting_rules.get.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 +	}
 +	return rules, nil
@@ -420,26 +521,41 @@ index 000000000000..9118bfa70228
 +	if err := a.Srv().Store().System().SaveOrUpdate(&model.System{Name: channelPostingRulesKeyPrefix + channel.Id, Value: string(value)}); err != nil {
 +		return model.NewAppError("SaveChannelPostingRules", "app.channel_posting_rules.save.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
 +	}
++
++	if err := a.Srv().channelPostingRulesCache.Remove(channel.Id); err != nil {
++		return model.NewAppError("SaveChannelPostingRules", "app.channel_posting_rules.save.app_error", nil, "", http.StatusInternalServerError).Wrap(err)
++	}
 +	return nil
 +}
 +
-+func (a *App) isExemptFromChannelPostingRules(rctx request.CTX, userID, channelID string) (bool, *model.AppError) {
-+	if ok, _ := a.HasPermissionToChannel(rctx, userID, channelID, model.PermissionManageChannelRoles); ok {
-+		return true, nil
++func isChannelPostingRulesError(appErr *model.AppError) bool {
++	return appErr.Id == "api.post.create_post.slowmode.app_error"
++}
++
++func (a *App) enforceChannelPostingRules(rctx request.CTX, post *model.Post, channel *model.Channel, user *model.User, flags model.CreatePostFlags) (func(), *model.AppError) {
++	noop := func() {}
++	if channel.IsGroupOrDirect() || post.IsSystemMessage() || user.IsBot || flags.FromIncomingWebhook || flags.FromPlugin {
++		return noop, nil
 +	}
 +
-+	user, appErr := a.GetUser(rctx, userID)
++	rules, appErr := a.GetChannelPostingRules(channel.Id)
 +	if appErr != nil {
-+		return false, appErr
++		return nil, appErr
 +	}
-+	return user.IsBot, nil
++	if rules.SlowmodeSeconds == 0 {
++		return noop, a.checkChannelPostingRules(rctx, post, channel)
++	}
++
++	// Held until the post is saved. An in-process lock suffices because Mattermax runs single-node.
++	unlock := a.Srv().channelPostingRulesLocks.lock(channel.Id + user.Id)
++	if appErr := a.checkChannelPostingRules(rctx, post, channel); appErr != nil {
++		unlock()
++		return nil, appErr
++	}
++	return unlock, nil
 +}
 +
 +func (a *App) checkChannelPostingRules(rctx request.CTX, post *model.Post, channel *model.Channel) *model.AppError {
-+	if channel.IsGroupOrDirect() {
-+		return nil
-+	}
-+
 +	rules, appErr := a.GetChannelPostingRules(channel.Id)
 +	if appErr != nil {
 +		return appErr
@@ -449,9 +565,8 @@ index 000000000000..9118bfa70228
 +		return nil
 +	}
 +
-+	exempt, appErr := a.isExemptFromChannelPostingRules(rctx, post.UserId, channel.Id)
-+	if appErr != nil || exempt {
-+		return appErr
++	if ok, _ := a.HasPermissionToChannel(rctx, post.UserId, channel.Id, model.PermissionManageChannelRoles); ok {
++		return nil
 +	}
 +
 +	return a.checkSlowmode(post, channel, rules.SlowmodeSeconds)
@@ -472,21 +587,127 @@ index 000000000000..9118bfa70228
 +	secondsLeft := (lastCreateAt + interval - now + 999) / 1000
 +	return model.NewAppError("createPost", "api.post.create_post.slowmode.app_error", map[string]any{"Seconds": secondsLeft}, "", http.StatusTooManyRequests)
 +}
-diff --git a/server/channels/app/post.go b/server/channels/app/post.go
-index 58c842f5f172..bf6a2749c795 100644
---- a/server/channels/app/post.go
-+++ b/server/channels/app/post.go
-@@ -65,6 +65,10 @@ func (a *App) CreatePostAsUserWithFlags(rctx request.CTX, post *model.Post, curr
- 		return nil, false, model.NewAppError("createPost", "api.post.create_post.can_not_post_in_restricted_dm.error", nil, "", http.StatusBadRequest)
+diff --git a/server/channels/app/command.go b/server/channels/app/command.go
+index 2a3472801a98..8fd80cc794e8 100644
+--- a/server/channels/app/command.go
++++ b/server/channels/app/command.go
+@@ -678,6 +678,10 @@ func (a *App) HandleCommandResponse(rctx request.CTX, command *model.Command, ar
+ 		}
  	}
  
-+	if err = a.checkChannelPostingRules(rctx, post, channel); err != nil {
-+		return nil, false, err
++	if lastError != nil && isChannelPostingRulesError(lastError) {
++		return response, lastError
 +	}
 +
- 	flags.TriggerWebhooks = true
- 	rp, isMemberForPreviews, err := a.CreatePost(rctx, post, channel, flags)
- 	if err != nil {
+ 	if lastError != nil {
+ 		return response, model.NewAppError("command", "api.command.execute_command.create_post_failed.app_error", map[string]any{"Trigger": trigger}, "", http.StatusInternalServerError)
+ 	}
+diff --git a/server/channels/app/keyed_mutex.go b/server/channels/app/keyed_mutex.go
+new file mode 100644
+index 000000000000..292d84af9298
+--- /dev/null
++++ b/server/channels/app/keyed_mutex.go
+@@ -0,0 +1,41 @@
++// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
++// See LICENSE.txt for license information.
++
++package app
++
++import "sync"
++
++type keyedMutex struct {
++	mu      sync.Mutex
++	entries map[string]*keyedMutexEntry
++}
++
++type keyedMutexEntry struct {
++	sync.Mutex
++	refs int
++}
++
++func (k *keyedMutex) lock(key string) func() {
++	k.mu.Lock()
++	if k.entries == nil {
++		k.entries = map[string]*keyedMutexEntry{}
++	}
++	entry := k.entries[key]
++	if entry == nil {
++		entry = &keyedMutexEntry{}
++		k.entries[key] = entry
++	}
++	entry.refs++
++	k.mu.Unlock()
++
++	entry.Lock()
++	return func() {
++		entry.Unlock()
++		k.mu.Lock()
++		entry.refs--
++		if entry.refs == 0 {
++			delete(k.entries, key)
++		}
++		k.mu.Unlock()
++	}
++}
+diff --git a/server/channels/app/post.go b/server/channels/app/post.go
+index 58c842f5f172..bc30d1fe946a 100644
+--- a/server/channels/app/post.go
++++ b/server/channels/app/post.go
+@@ -265,6 +265,12 @@ func (a *App) CreatePost(rctx request.CTX, post *model.Post, channel *model.Chan
+ 		}
+ 	}
+ 
++	unlockPostingRules, err := a.enforceChannelPostingRules(rctx, post, channel, user, flags)
++	if err != nil {
++		return nil, false, err
++	}
++	defer unlockPostingRules()
++
+ 	if user.IsBot {
+ 		post.AddProp(model.PostPropsFromBot, "true")
+ 	}
+diff --git a/server/channels/app/scheduled_post_job.go b/server/channels/app/scheduled_post_job.go
+index d78b66f74af9..a46eb96ab6f8 100644
+--- a/server/channels/app/scheduled_post_job.go
++++ b/server/channels/app/scheduled_post_job.go
+@@ -254,6 +254,9 @@ func (a *App) postScheduledPost(rctx request.CTX, scheduledPost *model.Scheduled
+ 		)
+ 
+ 		scheduledPost.ErrorCode = model.ScheduledPostErrorUnknownError
++		if isChannelPostingRulesError(appErr) {
++			scheduledPost.ErrorCode = model.ScheduledPostErrorUnableToSend
++		}
+ 		return scheduledPostFailed, appErr
+ 	}
+ 
+diff --git a/server/channels/app/server.go b/server/channels/app/server.go
+index 74bd6abd64be..5a48eb70e8c3 100644
+--- a/server/channels/app/server.go
++++ b/server/channels/app/server.go
+@@ -128,6 +128,9 @@ type Server struct {
+ 	clusterLeaderListenerId string
+ 	loggerLicenseListenerId string
+ 
++	channelPostingRulesCache cache.Cache
++	channelPostingRulesLocks keyedMutex
++
+ 	pushNotificationServerLicenseListenerId       string
+ 	pushNotificationServerClusterLeaderListenerId string
+ 
+@@ -448,6 +451,13 @@ func NewServer(options ...Option) (*Server, error) {
+ 	}); err != nil {
+ 		return nil, errors.Wrap(err, "Unable to create opengraphdata cache")
+ 	}
++	if s.channelPostingRulesCache, err = s.platform.CacheProvider().NewCache(&cache.CacheOptions{
++		Name:          "channel_posting_rules",
++		Size:          model.ChannelCacheSize,
++		DefaultExpiry: 15 * time.Minute,
++	}); err != nil {
++		return nil, errors.Wrap(err, "Unable to create channel posting rules cache")
++	}
+ 
+ 	s.createPushNotificationsHub(request.EmptyContext(s.Log()))
+ 
 diff --git a/server/channels/store/retrylayer/retrylayer.go b/server/channels/store/retrylayer/retrylayer.go
 index e6c6a5ab513c..d46178ce78a1 100644
 --- a/server/channels/store/retrylayer/retrylayer.go

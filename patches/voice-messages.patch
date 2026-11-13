@@ -8,12 +8,12 @@ Mattermax-Patch: voice-messages.patch
  .../advanced_text_editor.tsx                  |   3 +-
  .../use_upload_files.test.tsx                 |   6 +-
  .../advanced_text_editor/use_upload_files.tsx |  23 +-
- .../file_attachment_list.test.tsx             |  58 ++++
+ .../file_attachment_list.test.tsx             |  69 +++++
  .../file_attachment_list.tsx                  |  19 +-
  .../use_voice_message_uploads.test.ts         |  56 ++++
  .../use_voice_message_uploads.ts              |  37 +++
  .../voice_message/voice_message.test.ts       | 130 +++++++++
- .../components/voice_message/voice_message.ts | 134 +++++++++
+ .../components/voice_message/voice_message.ts | 143 ++++++++++
  .../voice_message/voice_message_button.scss   |  39 +++
  .../voice_message_button.test.tsx             | 180 ++++++++++++
  .../voice_message/voice_message_button.tsx    | 269 ++++++++++++++++++
@@ -21,7 +21,7 @@ Mattermax-Patch: voice-messages.patch
  .../voice_message_player.test.tsx             |  93 ++++++
  .../voice_message/voice_message_player.tsx    | 176 ++++++++++++
  webapp/channels/src/i18n/en.json              |  56 ++++
- 16 files changed, 1350 insertions(+), 11 deletions(-)
+ 16 files changed, 1370 insertions(+), 11 deletions(-)
  create mode 100644 webapp/channels/src/components/voice_message/use_voice_message_uploads.test.ts
  create mode 100644 webapp/channels/src/components/voice_message/use_voice_message_uploads.ts
  create mode 100644 webapp/channels/src/components/voice_message/voice_message.test.ts
@@ -151,15 +151,15 @@ index b5b987154fa3..8a18726e89e7 100644
  
  export default useUploadFiles;
 diff --git a/webapp/channels/src/components/file_attachment_list/file_attachment_list.test.tsx b/webapp/channels/src/components/file_attachment_list/file_attachment_list.test.tsx
-index a931a918102a..aa94a004da10 100644
+index a931a918102a..df18d051fb7e 100644
 --- a/webapp/channels/src/components/file_attachment_list/file_attachment_list.test.tsx
 +++ b/webapp/channels/src/components/file_attachment_list/file_attachment_list.test.tsx
-@@ -170,6 +170,64 @@ describe('FileAttachmentList', () => {
+@@ -170,6 +170,75 @@ describe('FileAttachmentList', () => {
          expect(screen.getByTestId('fileAttachmentList').querySelector('.post-image__column')).toBeInTheDocument();
      });
  
 +    describe('voice messages', () => {
-+        const voiceFile = TestHelper.getFileInfoMock({id: 'voice_file', name: 'voice-message-1.webm', extension: 'webm', mime_type: 'audio/webm', delete_at: 0, post_id: 'voice_post'});
++        const voiceFile = TestHelper.getFileInfoMock({id: 'voice_file', name: 'voice-message-1.weba', extension: 'weba', mime_type: 'audio/webm', delete_at: 0, post_id: 'voice_post'});
 +        const audioFile = TestHelper.getFileInfoMock({id: 'audio_file', name: 'song.mp3', extension: 'mp3', mime_type: 'audio/mpeg', delete_at: 0, post_id: 'voice_post'});
 +
 +        function renderPost(files: typeof fileInfos, props: Record<string, unknown>) {
@@ -191,7 +191,7 @@ index a931a918102a..aa94a004da10 100644
 +
 +            expect(screen.getByTestId('voiceMessagePlayer')).toBeInTheDocument();
 +            expect(screen.getByText('0:04')).toBeInTheDocument();
-+            expect(screen.queryByText('voice-message-1.webm')).not.toBeInTheDocument();
++            expect(screen.queryByText('voice-message-1.weba')).not.toBeInTheDocument();
 +            expect(screen.queryByTestId('media-gallery-tile')).not.toBeInTheDocument();
 +        });
 +
@@ -209,6 +209,17 @@ index a931a918102a..aa94a004da10 100644
 +            expect(screen.getByTestId('fileAttachmentList').querySelector('.post-image__column')?.textContent).toContain('song.mp3');
 +        });
 +
++        test.each([
++            ['a PDF', TestHelper.getFileInfoMock({id: 'voice_file', name: 'report.pdf', extension: 'pdf', mime_type: 'application/pdf', delete_at: 0, post_id: 'voice_post'}), 'report.pdf'],
++            ['an image', TestHelper.getFileInfoMock({id: 'voice_file', name: 'photo.png', extension: 'png', mime_type: 'image/png', delete_at: 0, post_id: 'voice_post'}), 'photo.png'],
++            ['a video', TestHelper.getFileInfoMock({id: 'voice_file', name: 'clip.webm', extension: 'webm', mime_type: 'video/webm', delete_at: 0, post_id: 'voice_post'}), 'clip.webm'],
++        ])('should keep the upstream attachment when voice message props point at %s', (_, file, name) => {
++            renderPost([file, audioFile], voiceMessages);
++
++            expect(screen.queryByTestId('voiceMessagePlayer')).not.toBeInTheDocument();
++            expect(screen.getByTestId('fileAttachmentList').textContent).toContain(name);
++        });
++
 +        test('should keep the upstream attachment for a deleted voice file', () => {
 +            renderPost([{...voiceFile, delete_at: 5}], voiceMessages);
 +
@@ -220,14 +231,14 @@ index a931a918102a..aa94a004da10 100644
          const state = {
              ...defaultState,
 diff --git a/webapp/channels/src/components/file_attachment_list/file_attachment_list.tsx b/webapp/channels/src/components/file_attachment_list/file_attachment_list.tsx
-index 16e15c08b8f2..d25880162cd1 100644
+index 16e15c08b8f2..24a5d0392344 100644
 --- a/webapp/channels/src/components/file_attachment_list/file_attachment_list.tsx
 +++ b/webapp/channels/src/components/file_attachment_list/file_attachment_list.tsx
 @@ -8,6 +8,8 @@ import {sortFileInfos} from 'mattermost-redux/utils/file_utils';
  import FileAttachment from 'components/file_attachment';
  import FilePreviewModal from 'components/file_preview_modal';
  import SingleImageView from 'components/single_image_view';
-+import {parseVoiceMessages} from 'components/voice_message/voice_message';
++import {parseVoiceMessages, voiceMessageForFile} from 'components/voice_message/voice_message';
 +import VoiceMessagePlayer from 'components/voice_message/voice_message_player';
  
  import {FileTypes, ModalIdentifiers} from 'utils/constants';
@@ -244,7 +255,7 @@ index 16e15c08b8f2..d25880162cd1 100644
  
      const hasDeletedFile = sortedFileInfos.some((f) => f.delete_at > 0);
      const isEditHistory = Boolean(props.isEditHistory);
-+    const hasVoiceMessage = sortedFileInfos.some((f) => voiceMessages[f.id] && !f.delete_at && !f.archived);
++    const hasVoiceMessage = sortedFileInfos.some((f) => voiceMessageForFile(voiceMessages, f));
  
 -    if (!isInPermalink && !props.firstFileRejected && !hasDeletedFile && !isEditHistory) {
 +    if (!hasVoiceMessage && !isInPermalink && !props.firstFileRejected && !hasDeletedFile && !isEditHistory) {
@@ -264,7 +275,7 @@ index 16e15c08b8f2..d25880162cd1 100644
          for (let i = 0; i < sortedFileInfos.length; i++) {
              const fileInfo = sortedFileInfos[i];
              const isDeleted = fileInfo.delete_at > 0;
-+            const voiceMessage = isDeleted || fileInfo.archived ? undefined : voiceMessages[fileInfo.id];
++            const voiceMessage = voiceMessageForFile(voiceMessages, fileInfo);
 +            if (voiceMessage) {
 +                postFiles.push(
 +                    <VoiceMessagePlayer
@@ -280,7 +291,7 @@ index 16e15c08b8f2..d25880162cd1 100644
                      key={fileInfo.id}
 diff --git a/webapp/channels/src/components/voice_message/use_voice_message_uploads.test.ts b/webapp/channels/src/components/voice_message/use_voice_message_uploads.test.ts
 new file mode 100644
-index 000000000000..062da395a1cc
+index 000000000000..b3cc143c5c27
 --- /dev/null
 +++ b/webapp/channels/src/components/voice_message/use_voice_message_uploads.test.ts
 @@ -0,0 +1,56 @@
@@ -299,7 +310,7 @@ index 000000000000..062da395a1cc
 +
 +describe('useVoiceMessageUploads', () => {
 +    const voiceMessage = {duration: 3100, waveform: [20, 80, 100]};
-+    const file = new File(['opus'], 'voice-message-1731420000000.webm', {type: 'audio/webm'});
++    const file = new File(['opus'], 'voice-message-1731420000000.weba', {type: 'audio/webm'});
 +
 +    function setup() {
 +        const checkPluginHooksAndUploadFiles = jest.fn();
@@ -385,7 +396,7 @@ index 000000000000..b2f98ddda3dc
 +}
 diff --git a/webapp/channels/src/components/voice_message/voice_message.test.ts b/webapp/channels/src/components/voice_message/voice_message.test.ts
 new file mode 100644
-index 000000000000..18994bdc7686
+index 000000000000..5f3fa9b0d34a
 --- /dev/null
 +++ b/webapp/channels/src/components/voice_message/voice_message.test.ts
 @@ -0,0 +1,130 @@
@@ -516,17 +527,19 @@ index 000000000000..18994bdc7686
 +
 +    it('falls back to WebM when MP4 recording is not supported', () => {
 +        mockSupport(['audio/webm;codecs=opus']);
-+        expect(pickRecorderFormat()).toEqual({mimeType: 'audio/webm;codecs=opus', extension: 'webm'});
++        expect(pickRecorderFormat()).toEqual({mimeType: 'audio/webm;codecs=opus', extension: 'weba'});
 +    });
 +});
 diff --git a/webapp/channels/src/components/voice_message/voice_message.ts b/webapp/channels/src/components/voice_message/voice_message.ts
 new file mode 100644
-index 000000000000..628ff030980c
+index 000000000000..0401729d19e8
 --- /dev/null
 +++ b/webapp/channels/src/components/voice_message/voice_message.ts
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,143 @@
 +// Copyright (c) 2015-present Mattermost, Inc. All Rights Reserved.
 +// See LICENSE.txt for license information.
++
++import type {FileInfo} from '@mattermost/types/files';
 +
 +import type {PostDraft} from 'types/store/draft';
 +
@@ -553,7 +566,7 @@ index 000000000000..628ff030980c
 +const RECORDER_FORMATS: RecorderFormat[] = [
 +    {mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'm4a'},
 +    {mimeType: 'audio/mp4', extension: 'm4a'},
-+    {mimeType: 'audio/webm;codecs=opus', extension: 'webm'},
++    {mimeType: 'audio/webm;codecs=opus', extension: 'weba'},
 +];
 +
 +export function pickRecorderFormat(): RecorderFormat | undefined {
@@ -602,6 +615,13 @@ index 000000000000..628ff030980c
 +        }
 +    }
 +    return voiceMessages;
++}
++
++export function voiceMessageForFile(voiceMessages: Record<string, VoiceMessage>, fileInfo: FileInfo): VoiceMessage | undefined {
++    if (fileInfo.delete_at > 0 || fileInfo.archived || !fileInfo.mime_type.startsWith('audio/')) {
++        return undefined;
++    }
++    return voiceMessages[fileInfo.id];
 +}
 +
 +export function addVoiceMessages(draft: PostDraft, added: Record<string, VoiceMessage>): PostDraft {
@@ -706,7 +726,7 @@ index 000000000000..0ca2cbb000ca
 +}
 diff --git a/webapp/channels/src/components/voice_message/voice_message_button.test.tsx b/webapp/channels/src/components/voice_message/voice_message_button.test.tsx
 new file mode 100644
-index 000000000000..bb95c2381136
+index 000000000000..f74c53740556
 --- /dev/null
 +++ b/webapp/channels/src/components/voice_message/voice_message_button.test.tsx
 @@ -0,0 +1,180 @@
@@ -852,7 +872,7 @@ index 000000000000..bb95c2381136
 +
 +        await waitFor(() => expect(onRecorded).toHaveBeenCalledTimes(1));
 +        const {file, voiceMessage} = onRecorded.mock.calls[0][0];
-+        expect(file.name).toMatch(/^voice-message-\d+\.webm$/);
++        expect(file.name).toMatch(/^voice-message-\d+\.weba$/);
 +        expect(file.type).toBe('audio/webm');
 +        expect(voiceMessage.duration).toBe(2400);
 +        expect(voiceMessage.waveform).toHaveLength(64);
@@ -1255,7 +1275,7 @@ index 000000000000..ced1389f3093
 +}
 diff --git a/webapp/channels/src/components/voice_message/voice_message_player.test.tsx b/webapp/channels/src/components/voice_message/voice_message_player.test.tsx
 new file mode 100644
-index 000000000000..efd6d94458a9
+index 000000000000..6fa12994122d
 --- /dev/null
 +++ b/webapp/channels/src/components/voice_message/voice_message_player.test.tsx
 @@ -0,0 +1,93 @@
@@ -1271,7 +1291,7 @@ index 000000000000..efd6d94458a9
 +import VoiceMessagePlayer from './voice_message_player';
 +
 +describe('VoiceMessagePlayer', () => {
-+    const fileInfo = TestHelper.getFileInfoMock({id: 'file1', name: 'voice-message-1.webm', extension: 'webm'});
++    const fileInfo = TestHelper.getFileInfoMock({id: 'file1', name: 'voice-message-1.weba', extension: 'weba', mime_type: 'audio/webm'});
 +    const waveform = Array.from({length: 64}, (_, i) => i);
 +
 +    beforeEach(() => {

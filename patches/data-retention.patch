@@ -8,44 +8,52 @@ Mattermax-Patch: data-retention.patch
  .../api4/data_retention_service_test.go       |  133 ++
  server/channels/api4/data_retention_test.go   |   24 +-
  server/channels/app/data_retention.go         |   52 -
+ .../app/data_retention_attachments_test.go    |   82 ++
+ .../app/data_retention_confirm_test.go        |  260 ++++
  server/channels/app/data_retention_job.go     |   37 +
- .../channels/app/data_retention_job_test.go   | 1111 +++++++++++++++++
- .../channels/app/data_retention_policies.go   |  297 +++++
+ .../channels/app/data_retention_job_test.go   | 1116 +++++++++++++++++
+ .../channels/app/data_retention_policies.go   |  500 ++++++++
  server/channels/app/file.go                   |   18 +-
  server/channels/app/job.go                    |    2 +
- server/channels/jobs/data_retention/plan.go   |  161 +++
+ .../channels/jobs/data_retention/confirm.go   |   85 ++
+ .../jobs/data_retention/confirm_test.go       |   77 ++
+ server/channels/jobs/data_retention/plan.go   |  180 +++
  .../channels/jobs/data_retention/plan_test.go |  208 +++
  .../channels/jobs/data_retention/scheduler.go |   52 +
  .../jobs/data_retention/scheduler_test.go     |   74 ++
- server/channels/jobs/data_retention/worker.go |  785 ++++++++++++
+ server/channels/jobs/data_retention/worker.go |  843 +++++++++++++
  .../jobs/data_retention/worker_test.go        |   66 +
  .../store/localcachelayer/file_info_layer.go  |    2 +-
  .../file_info_layer_clear_test.go             |   36 +
- .../channels/store/retrylayer/retrylayer.go   |  168 +++
+ .../channels/store/retrylayer/retrylayer.go   |  189 +++
  .../searchlayer/file_info_layer_retention.go  |   17 +
  .../sqlstore/data_retention_store_test.go     |   14 +
- .../sqlstore/file_info_store_retention.go     |  125 ++
+ .../sqlstore/file_info_store_retention.go     |  143 +++
  .../store/sqlstore/job_store_retention.go     |   43 +
  .../store/sqlstore/retention_policy_store.go  |   14 +-
  .../retention_policy_store_dependents.go      |   74 ++
  .../channels/store/sqlstore/thread_store.go   |    6 +-
- server/channels/store/store.go                |    8 +
- .../store/storetest/data_retention_store.go   |  613 +++++++++
- .../store/storetest/mocks/FileInfoStore.go    |  126 ++
+ server/channels/store/store.go                |    9 +
+ .../store/storetest/data_retention_store.go   |  647 ++++++++++
+ .../store/storetest/mocks/FileInfoStore.go    |  156 +++
  .../store/storetest/mocks/JobStore.go         |   30 +
  .../storetest/mocks/RetentionPolicyStore.go   |   48 +
- .../channels/store/timerlayer/timerlayer.go   |  128 ++
+ .../channels/store/timerlayer/timerlayer.go   |  144 +++
  server/config/client.go                       |   15 +-
  server/config/client_data_retention_test.go   |   41 +
  .../admin_console/admin_definition.tsx        |    4 -
  .../__snapshots__/admin_sidebar.test.tsx.snap |  152 +++
  .../data_retention_job_cancel.test.tsx        |   56 +
  .../data_retention_settings.tsx               |    2 +-
- 36 files changed, 4641 insertions(+), 101 deletions(-)
+ 40 files changed, 5550 insertions(+), 101 deletions(-)
  create mode 100644 server/channels/api4/data_retention_service_test.go
+ create mode 100644 server/channels/app/data_retention_attachments_test.go
+ create mode 100644 server/channels/app/data_retention_confirm_test.go
  create mode 100644 server/channels/app/data_retention_job.go
  create mode 100644 server/channels/app/data_retention_job_test.go
  create mode 100644 server/channels/app/data_retention_policies.go
+ create mode 100644 server/channels/jobs/data_retention/confirm.go
+ create mode 100644 server/channels/jobs/data_retention/confirm_test.go
  create mode 100644 server/channels/jobs/data_retention/plan.go
  create mode 100644 server/channels/jobs/data_retention/plan_test.go
  create mode 100644 server/channels/jobs/data_retention/scheduler.go
@@ -358,6 +366,360 @@ index 85a477c8a1e9..e4057e78fcb6 100644
 -	return model.NewAppError("App."+methodName, "ent.data_retention.generic.license.error",
 -		nil, "", http.StatusNotImplemented)
 -}
+diff --git a/server/channels/app/data_retention_attachments_test.go b/server/channels/app/data_retention_attachments_test.go
+new file mode 100644
+index 000000000000..f7e92311c401
+--- /dev/null
++++ b/server/channels/app/data_retention_attachments_test.go
+@@ -0,0 +1,82 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package app
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/mattermost/mattermost/server/public/model"
++)
++
++func TestDataRetentionJobRemovesAttachmentsWithTheirPosts(t *testing.T) {
++	mainHelper.Parallel(t)
++	e := setupRetention(t, func(s *model.DataRetentionSettings) { s.EnableFileDeletion = model.NewPointer(false) })
++	old := e.now - 3*24*retentionHour
++
++	deleted := e.post(e.th.BasicChannel.Id, old)
++	pdf := e.file(deleted.Id, e.now)
++	image := e.file(deleted.Id, e.now, withImagePaths)
++	shared := e.file(deleted.Id, e.now, withImagePaths)
++	copies, appErr := e.th.App.CopyFileInfos(e.th.Context, e.th.BasicUser.Id, []string{shared.info.Id})
++	require.Nil(t, appErr)
++	require.Len(t, copies, 1)
++	keptPost := e.post(e.th.BasicChannel.Id, e.now)
++	oldFileOnKeptPost := e.file(keptPost.Id, old)
++
++	type state struct {
++		row     bool
++		deleted bool
++		objects int
++	}
++	check := func(t *testing.T, name string, f *retentionFile, want state) {
++		t.Helper()
++		row, deleteAt, objects := e.fileState(f)
++		assert.Equal(t, want, state{row, deleteAt > 0, objects}, name)
++	}
++	assertEndState := func(t *testing.T) {
++		t.Helper()
++		assert.False(t, e.postExists(deleted.Id))
++		check(t, "pdf of a deleted post", pdf, state{false, false, 0})
++		check(t, "image, thumbnail and preview of a deleted post", image, state{false, false, 0})
++		check(t, "file whose paths a copy still references", shared, state{false, false, 3})
++		check(t, "old file on a kept post, with file retention off", oldFileOnKeptPost, state{true, false, 1})
++		var copyDeleteAt []int64
++		require.NoError(t, e.th.SQLStore.GetMaster().Select(&copyDeleteAt, "SELECT DeleteAt FROM FileInfo WHERE Id = ?", copies[0]))
++		assert.Equal(t, []int64{0}, copyDeleteAt, "the copy stays visible")
++		assert.Zero(t, e.outboxRows())
++	}
++
++	job := e.run(nil, nil)
++	require.Equal(t, model.JobStatusSuccess, job.Status, job.Data["error"])
++	requireCounters(t, job, map[string]int64{
++		"posts_deleted":            1,
++		"files_deleted_with_posts": 2,
++		"files_shared_kept":        1,
++		"file_objects_removed":     4,
++		"files_deleted":            0,
++		"files_failed":             0,
++	})
++	assertEndState(t)
++
++	rerun := e.run(nil, nil)
++	require.Equal(t, model.JobStatusSuccess, rerun.Status, rerun.Data["error"])
++	requireCounters(t, rerun, zeroRetentionCounters)
++	assertEndState(t)
++
++	t.Run("the bytes go once the last reference is deleted", func(t *testing.T) {
++		later := e.post(e.th.BasicChannel.Id, old)
++		e.exec("UPDATE FileInfo SET PostId = ? WHERE Id = ?", later.Id, copies[0])
++
++		job := e.run(nil, nil)
++		require.Equal(t, model.JobStatusSuccess, job.Status, job.Data["error"])
++		requireCounters(t, job, map[string]int64{"files_deleted_with_posts": 1, "file_objects_removed": 3, "files_shared_kept": 0})
++		assert.False(t, e.exists("FileInfo", "Id", copies[0]))
++		for _, p := range shared.paths {
++			assert.False(t, e.objectExists(p), p)
++		}
++	})
++}
+diff --git a/server/channels/app/data_retention_confirm_test.go b/server/channels/app/data_retention_confirm_test.go
+new file mode 100644
+index 000000000000..baf9c586d8de
+--- /dev/null
++++ b/server/channels/app/data_retention_confirm_test.go
+@@ -0,0 +1,260 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package app
++
++import (
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/mattermost/mattermost/server/public/model"
++)
++
++const (
++	pausedText   = "Scheduled deletion is paused until an administrator selects Run Deletion Job Now. Nothing was deleted."
++	stricterText = "Retention became stricter after the last manual run. Scheduled deletion is paused until an administrator selects Run Deletion Job Now. Nothing was deleted."
++	stoppedText  = "Retention became stricter during this run, so it stopped. Scheduled deletion is paused until an administrator selects Run Deletion Job Now."
++)
++
++type confirmFixture struct {
++	team2, team3                   *model.Team
++	c1, plainChannel, team2Channel *model.Channel
++	channelPolicy, teamPolicy      string
++}
++
++func confirmSettings(base func(s *model.DataRetentionSettings)) func(s *model.DataRetentionSettings) {
++	return func(s *model.DataRetentionSettings) {
++		s.EnableMessageDeletion = model.NewPointer(true)
++		s.MessageRetentionHours = model.NewPointer(240)
++		s.MessageRetentionDays = model.NewPointer(0)
++		s.EnableFileDeletion = model.NewPointer(true)
++		s.FileRetentionHours = model.NewPointer(480)
++		s.FileRetentionDays = model.NewPointer(0)
++		s.PreservePinnedPosts = model.NewPointer(true)
++		s.BatchSize = model.NewPointer(1000)
++		if base != nil {
++			base(s)
++		}
++	}
++}
++
++// armConfirm builds fresh teams and channels: global messages 10 days, c1 in a 20-day channel policy,
++// team2 in a 5-day team policy, plainChannel (c1's team) and team3 in no policy. Then a manual run arms.
++func (e *retentionEnv) armConfirm(base func(s *model.DataRetentionSettings)) *confirmFixture {
++	e.settings(confirmSettings(base))
++	team1 := e.th.CreateTeam(e.t)
++	fx := &confirmFixture{team2: e.th.CreateTeam(e.t), team3: e.th.CreateTeam(e.t), c1: e.channel(team1), plainChannel: e.channel(team1)}
++	fx.team2Channel = e.channel(fx.team2)
++	fx.channelPolicy = e.policy("Channel twenty days", 20, nil, []string{fx.c1.Id})
++	fx.teamPolicy = e.policy("Team two five days", 5, []string{fx.team2.Id}, nil)
++
++	manual := e.run(nil, nil)
++	require.Equal(e.t, model.JobStatusSuccess, manual.Status, manual.Data["error"])
++	require.True(e.t, e.scheduledRuns(), "a manual run arms the schedule")
++	return fx
++}
++
++func (e *retentionEnv) scheduledRuns() bool {
++	job := e.scheduled()
++	switch job.Status {
++	case model.JobStatusSuccess:
++		return true
++	case model.JobStatusWarning:
++		assert.Contains(e.t, []string{pausedText, stricterText}, job.Data["error"])
++		return false
++	}
++	require.Failf(e.t, "unexpected scheduled job status", "%s: %s", job.Status, job.Data["error"])
++	return false
++}
++
++func (e *retentionEnv) settings(update func(s *model.DataRetentionSettings)) {
++	e.th.App.UpdateConfig(func(cfg *model.Config) { update(&cfg.DataRetentionSettings) })
++}
++
++func patchDuration(id string, days int64) *model.RetentionPolicyWithTeamAndChannelIDs {
++	return &model.RetentionPolicyWithTeamAndChannelIDs{RetentionPolicy: model.RetentionPolicy{ID: id, PostDurationDays: model.NewPointer(days)}}
++}
++
++func TestDataRetentionStricterChangesPauseTheSchedule(t *testing.T) {
++	mainHelper.Parallel(t)
++	off := func(s *model.DataRetentionSettings) {
++		s.EnableMessageDeletion = model.NewPointer(false)
++		s.EnableFileDeletion = model.NewPointer(false)
++		s.PreservePinnedPosts = model.NewPointer(false)
++	}
++	cases := []struct {
++		name   string
++		base   func(s *model.DataRetentionSettings)
++		change func(t *testing.T, e *retentionEnv, fx *confirmFixture)
++		paused bool
++	}{
++		{name: "message deletion turned on", base: off, paused: true, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.EnableMessageDeletion = model.NewPointer(true) })
++		}},
++		{name: "file deletion turned on", base: off, paused: true, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.EnableFileDeletion = model.NewPointer(true) })
++		}},
++		{name: "message period shortened", paused: true, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.MessageRetentionHours = model.NewPointer(120) })
++		}},
++		{name: "file period shortened", paused: true, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.FileRetentionHours = model.NewPointer(240) })
++		}},
++		{name: "Preserve Pinned Posts turned off", paused: true, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.PreservePinnedPosts = model.NewPointer(false) })
++		}},
++		{name: "message deletion turned off", change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.EnableMessageDeletion = model.NewPointer(false) })
++		}},
++		{name: "file deletion turned off", change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.EnableFileDeletion = model.NewPointer(false) })
++		}},
++		{name: "message and file periods lengthened", change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) {
++				s.MessageRetentionHours = model.NewPointer(480)
++				s.FileRetentionHours = model.NewPointer(960)
++			})
++		}},
++		{name: "the same message period in days", change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) {
++				s.MessageRetentionHours = model.NewPointer(0)
++				s.MessageRetentionDays = model.NewPointer(10)
++			})
++		}},
++		{name: "Preserve Pinned Posts turned on", base: off, change: func(t *testing.T, e *retentionEnv, _ *confirmFixture) {
++			e.settings(func(s *model.DataRetentionSettings) { s.PreservePinnedPosts = model.NewPointer(true) })
++		}},
++
++		{name: "new channel policy shorter than the global period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Three days", 3, nil, []string{fx.plainChannel.Id})
++		}},
++		{name: "new channel policy shorter than its team policy", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Three days", 3, nil, []string{fx.team2Channel.Id})
++		}},
++		{name: "new team policy shorter than the global period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Three days", 3, []string{fx.team3.Id}, nil)
++		}},
++		{name: "new channel policy longer than the global period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Thirty days", 30, nil, []string{fx.plainChannel.Id})
++		}},
++		{name: "new channel policy longer than its team policy", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Seven days", 7, nil, []string{fx.team2Channel.Id})
++		}},
++		{name: "new team policy longer than the global period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Thirty days", 30, []string{fx.team3.Id}, nil)
++		}},
++		{name: "new keep-forever policy", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			e.policy("Forever", -1, []string{fx.team3.Id}, []string{fx.plainChannel.Id})
++		}},
++
++		{name: "policy period shortened", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(patchDuration(fx.channelPolicy, 15))
++			require.Nil(t, appErr)
++		}},
++		{name: "policy period lengthened", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(patchDuration(fx.channelPolicy, 40))
++			require.Nil(t, appErr)
++		}},
++		{name: "policy set to keep forever", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(patchDuration(fx.teamPolicy, -1))
++			require.Nil(t, appErr)
++		}},
++		{name: "policy renamed", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(&model.RetentionPolicyWithTeamAndChannelIDs{RetentionPolicy: model.RetentionPolicy{ID: fx.channelPolicy, DisplayName: "Renamed"}})
++			require.Nil(t, appErr)
++		}},
++		{name: "patch keeps its channel and adds one that had a shorter period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(&model.RetentionPolicyWithTeamAndChannelIDs{RetentionPolicy: model.RetentionPolicy{ID: fx.channelPolicy}, ChannelIDs: []string{fx.c1.Id, fx.plainChannel.Id}})
++			require.Nil(t, appErr)
++		}},
++		{name: "patch drops a channel that falls back to a shorter period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			_, appErr := e.th.App.PatchRetentionPolicy(&model.RetentionPolicyWithTeamAndChannelIDs{RetentionPolicy: model.RetentionPolicy{ID: fx.channelPolicy}, ChannelIDs: []string{}})
++			require.Nil(t, appErr)
++		}},
++
++		{name: "channel added to a policy shorter than its period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.AddChannelsToRetentionPolicy(fx.teamPolicy, []string{fx.plainChannel.Id}))
++		}},
++		{name: "team added to a policy shorter than the global period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.AddTeamsToRetentionPolicy(fx.teamPolicy, []string{fx.team3.Id}))
++		}},
++		{name: "channel added to a policy longer than its period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.AddChannelsToRetentionPolicy(fx.channelPolicy, []string{fx.team2Channel.Id}))
++		}},
++		{name: "team added to a policy longer than the global period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.AddTeamsToRetentionPolicy(fx.channelPolicy, []string{fx.team3.Id}))
++		}},
++
++		{name: "channel removed falls back to a shorter period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.RemoveChannelsFromRetentionPolicy(fx.channelPolicy, []string{fx.c1.Id}))
++		}},
++		{name: "policy deleted whose channel falls back to a shorter period", paused: true, change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.DeleteRetentionPolicy(fx.channelPolicy))
++		}},
++		{name: "team removed falls back to a longer period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.RemoveTeamsFromRetentionPolicy(fx.teamPolicy, []string{fx.team2.Id}))
++		}},
++		{name: "policy deleted whose team falls back to a longer period", change: func(t *testing.T, e *retentionEnv, fx *confirmFixture) {
++			require.Nil(t, e.th.App.DeleteRetentionPolicy(fx.teamPolicy))
++		}},
++	}
++	shared := setupRetention(t, confirmSettings(nil))
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			e := &retentionEnv{t: t, th: shared.th, now: shared.now}
++			fx := e.armConfirm(tc.base)
++			tc.change(t, e, fx)
++			assert.Equal(t, !tc.paused, e.scheduledRuns(), "scheduled run after the change")
++			if tc.paused {
++				assert.Equal(t, stricterText, e.scheduled().Data["error"])
++				manual := e.run(nil, nil)
++				require.Equal(t, model.JobStatusSuccess, manual.Status, manual.Data["error"])
++				assert.True(t, e.scheduledRuns(), "another manual run confirms the change")
++			}
++		})
++	}
++}
++
++func TestDataRetentionStricterChangeDuringRuns(t *testing.T) {
++	mainHelper.Parallel(t)
++
++	t.Run("a policy shortened during a manual run leaves the schedule paused", func(t *testing.T) {
++		e := setupRetention(t, slowSettings)
++		policy := e.policy("Twenty days", 20, nil, []string{e.th.BasicChannel.Id})
++		e.slowRetention(10)
++		job := e.createJob(nil)
++		done := make(chan struct{})
++		go func() { defer close(done); e.worker(nil).DoJob(job) }()
++		e.waitFor("posts phase", func(j *model.Job) bool { return j.Data["phase"] == "posts" }, job.Id)
++		_, appErr := e.th.App.PatchRetentionPolicy(patchDuration(policy, 10))
++		require.Nil(t, appErr)
++		<-done
++
++		require.Equal(t, model.JobStatusSuccess, e.job(job.Id).Status)
++		assert.False(t, e.scheduledRuns())
++	})
++
++	t.Run("a scheduled run stops when a policy gets stricter", func(t *testing.T) {
++		e := setupRetention(t, slowSettings)
++		policy := e.policy("Twenty days", 20, nil, []string{e.th.BasicChannel.Id})
++		manual := e.run(nil, nil)
++		require.Equal(t, model.JobStatusSuccess, manual.Status, manual.Data["error"])
++		ids := e.slowRetention(10)
++
++		job := e.createJob(map[string]string{"trigger": "schedule"})
++		done := make(chan struct{})
++		go func() { defer close(done); e.worker(nil).DoJob(job) }()
++		require.Eventually(t, func() bool { return e.remaining(ids) < len(ids) }, 20*time.Second, 5*time.Millisecond, "some posts deleted")
++		_, appErr := e.th.App.PatchRetentionPolicy(patchDuration(policy, 10))
++		require.Nil(t, appErr)
++		<-done
++
++		stopped := e.job(job.Id)
++		assert.Equal(t, model.JobStatusWarning, stopped.Status)
++		assert.Equal(t, stoppedText, stopped.Data["error"])
++		assert.NotZero(t, e.remaining(ids), "the run stopped before finishing")
++	})
++}
 diff --git a/server/channels/app/data_retention_job.go b/server/channels/app/data_retention_job.go
 new file mode 100644
 index 000000000000..023729ba8134
@@ -403,10 +765,10 @@ index 000000000000..023729ba8134
 +}
 diff --git a/server/channels/app/data_retention_job_test.go b/server/channels/app/data_retention_job_test.go
 new file mode 100644
-index 000000000000..9dd9a0e26486
+index 000000000000..a40c28099252
 --- /dev/null
 +++ b/server/channels/app/data_retention_job_test.go
-@@ -0,0 +1,1111 @@
+@@ -0,0 +1,1116 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
@@ -414,6 +776,7 @@ index 000000000000..9dd9a0e26486
 +
 +import (
 +	"bytes"
++	"encoding/json"
 +	"errors"
 +	"net/http"
 +	"os"
@@ -651,7 +1014,7 @@ index 000000000000..9dd9a0e26486
 +var zeroRetentionCounters = map[string]int64{
 +	"posts_deleted": 0, "posts_dependents_cleaned": 0, "threads_deleted": 0, "thread_memberships_deleted": 0,
 +	"channel_member_history_deleted": 0, "flagged_posts_deleted": 0, "files_deleted": 0, "file_objects_removed": 0,
-+	"files_failed": 0, "files_shared_kept": 0, "burn_on_read_files_deleted": 0,
++	"files_failed": 0, "files_shared_kept": 0, "files_deleted_with_posts": 0,
 +}
 +
 +type retentionHistory struct {
@@ -799,7 +1162,7 @@ index 000000000000..9dd9a0e26486
 +	}
 +	check("old pdf without thumbnail or preview", fx.pdf, state{false, false, 0})
 +	check("old image", fx.image, state{false, false, 0})
-+	check("new file on a deleted post is only hidden", fx.newOnOldPost, state{true, true, 1})
++	check("new file on a deleted post goes with it", fx.newOnOldPost, state{false, false, 0})
 +	check("bookmark file", fx.bookmark, state{true, false, 1})
 +	check("draft attachment", fx.draft, state{true, false, 1})
 +	check("scheduled post attachment", fx.scheduledFile, state{true, false, 1})
@@ -829,11 +1192,11 @@ index 000000000000..9dd9a0e26486
 +		"thread_memberships_deleted":     2,
 +		"channel_member_history_deleted": 2,
 +		"flagged_posts_deleted":          1,
-+		"files_deleted":                  3,
-+		"file_objects_removed":           6,
++		"files_deleted":                  2,
++		"file_objects_removed":           7,
 +		"files_failed":                   0,
 +		"files_shared_kept":              1,
-+		"burn_on_read_files_deleted":     1,
++		"files_deleted_with_posts":       3,
 +	})
 +	now, err := strconv.ParseInt(job.Data["now"], 10, 64)
 +	require.NoError(t, err)
@@ -896,7 +1259,7 @@ index 000000000000..9dd9a0e26486
 +
 +		job := e.run(nil, nil)
 +		require.Equal(t, model.JobStatusSuccess, job.Status, job.Data["error"])
-+		requireCounters(t, job, map[string]int64{"burn_on_read_files_deleted": 1, "files_failed": 0})
++		requireCounters(t, job, map[string]int64{"files_deleted_with_posts": 1, "files_failed": 0})
 +		row, _, objects := e.fileState(f)
 +		assert.False(t, row)
 +		assert.Zero(t, objects)
@@ -1131,7 +1494,7 @@ index 000000000000..9dd9a0e26486
 +	}
 +	job := e.run(nil, failing)
 +	require.Equal(t, model.JobStatusWarning, job.Status)
-+	requireCounters(t, job, map[string]int64{"posts_deleted": 7, "files_failed": 1, "burn_on_read_files_deleted": 0})
++	requireCounters(t, job, map[string]int64{"posts_deleted": 7, "files_failed": 1, "files_deleted_with_posts": 0})
 +	assert.Equal(t, "1 files could not be removed from storage and will be retried on the next run.", job.Data["error"])
 +	assert.True(t, e.exists("TemporaryPosts", "PostId", bor.Id), "the batch stays queued for the next run")
 +	assert.NotZero(t, e.outboxRows())
@@ -1141,7 +1504,7 @@ index 000000000000..9dd9a0e26486
 +
 +	rerun := e.run(nil, nil)
 +	require.Equal(t, model.JobStatusSuccess, rerun.Status, rerun.Data["error"])
-+	requireCounters(t, rerun, map[string]int64{"burn_on_read_files_deleted": 1, "files_failed": 0})
++	requireCounters(t, rerun, map[string]int64{"files_deleted_with_posts": 1, "files_failed": 0})
 +	assert.False(t, e.exists("TemporaryPosts", "PostId", bor.Id))
 +	assert.Zero(t, e.outboxRows())
 +	row, _, objects = e.fileState(f)
@@ -1213,7 +1576,11 @@ index 000000000000..9dd9a0e26486
 +	assert.False(t, e.postExists(p.Id))
 +	sys, err := e.th.Server.Store().System().GetByName(data_retention.ArmedSystemKey)
 +	require.NoError(t, err)
-+	assert.Equal(t, manual.Id, sys.Value)
++	var confirmed struct {
++		JobID string `json:"job_id"`
++	}
++	require.NoError(t, json.Unmarshal([]byte(sys.Value), &confirmed))
++	assert.Equal(t, manual.Id, confirmed.JobID)
 +
 +	p2 := e.post(e.th.BasicChannel.Id, e.now-3*24*retentionHour)
 +	job = e.scheduled()
@@ -1520,10 +1887,10 @@ index 000000000000..9dd9a0e26486
 +}
 diff --git a/server/channels/app/data_retention_policies.go b/server/channels/app/data_retention_policies.go
 new file mode 100644
-index 000000000000..4b8749b67516
+index 000000000000..ff63db622948
 --- /dev/null
 +++ b/server/channels/app/data_retention_policies.go
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,500 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
@@ -1533,11 +1900,14 @@ index 000000000000..4b8749b67516
 +	"database/sql"
 +	"errors"
 +	"fmt"
++	"maps"
 +	"net/http"
++	"slices"
 +	"strings"
 +	"unicode/utf8"
 +
 +	"github.com/mattermost/mattermost/server/public/model"
++	"github.com/mattermost/mattermost/server/public/shared/mlog"
 +	"github.com/mattermost/mattermost/server/v8/channels/jobs/data_retention"
 +	"github.com/mattermost/mattermost/server/v8/channels/store"
 +	"github.com/mattermost/mattermost/server/v8/einterfaces"
@@ -1547,6 +1917,7 @@ index 000000000000..4b8749b67516
 +	retentionPolicyInvalidID  = "ent.data_retention.policies.invalid_policy"
 +	retentionPolicyInternalID = "ent.data_retention.policies.internal_error"
 +	retentionPolicyNameMax    = 64
++	retentionPage             = 100
 +)
 +
 +type dataRetentionService struct {
@@ -1618,7 +1989,13 @@ index 000000000000..4b8749b67516
 +}
 +
 +func (s *dataRetentionService) CreatePolicy(policy *model.RetentionPolicyWithTeamAndChannelIDs) (*model.RetentionPolicyWithTeamAndChannelCounts, *model.AppError) {
-+	if appErr := s.validate("CreatePolicy", policy, true); appErr != nil {
++	channels, appErr := s.validate("CreatePolicy", policy, true)
++	if appErr != nil {
++		return nil, appErr
++	}
++	period := data_retention.PolicyPeriod(policy.PostDurationDays)
++	change := data_retention.PolicyChange{OldPeriod: period, NewPeriod: period, AddedTeams: len(policy.TeamIDs), AddedChannelTeams: channelTeams(channels)}
++	if appErr := s.pauseIfStricter("CreatePolicy", change); appErr != nil {
 +		return nil, appErr
 +	}
 +	created, err := s.store().Save(policy)
@@ -1629,10 +2006,19 @@ index 000000000000..4b8749b67516
 +}
 +
 +func (s *dataRetentionService) PatchPolicy(patch *model.RetentionPolicyWithTeamAndChannelIDs) (*model.RetentionPolicyWithTeamAndChannelCounts, *model.AppError) {
-+	if _, appErr := s.existingPolicy("PatchPolicy", patch.ID); appErr != nil {
++	old, appErr := s.existingPolicy("PatchPolicy", patch.ID)
++	if appErr != nil {
 +		return nil, appErr
 +	}
-+	if appErr := s.validate("PatchPolicy", patch, false); appErr != nil {
++	channels, appErr := s.validate("PatchPolicy", patch, false)
++	if appErr != nil {
++		return nil, appErr
++	}
++	change, err := s.patchChange(old, patch, channels)
++	if err != nil {
++		return nil, retentionInternal("PatchPolicy", err)
++	}
++	if appErr := s.pauseIfStricter("PatchPolicy", change); appErr != nil {
 +		return nil, appErr
 +	}
 +	patched, err := s.store().Patch(patch)
@@ -1643,7 +2029,22 @@ index 000000000000..4b8749b67516
 +}
 +
 +func (s *dataRetentionService) DeletePolicy(policyID string) *model.AppError {
-+	if _, appErr := s.existingPolicy("DeletePolicy", policyID); appErr != nil {
++	policy, appErr := s.existingPolicy("DeletePolicy", policyID)
++	if appErr != nil {
++		return appErr
++	}
++	teams, err := s.policyTeams(policy)
++	if err != nil {
++		return retentionInternal("DeletePolicy", err)
++	}
++	channels, err := s.policyChannels(policy)
++	if err != nil {
++		return retentionInternal("DeletePolicy", err)
++	}
++	change := unchangedPeriod(policy)
++	change.RemovedTeams = len(teams)
++	change.RemovedChannelTeams = slices.Collect(maps.Values(channels))
++	if appErr := s.pauseIfStricter("DeletePolicy", change); appErr != nil {
 +		return appErr
 +	}
 +	if err := s.store().Delete(policyID); err != nil {
@@ -1671,17 +2072,29 @@ index 000000000000..4b8749b67516
 +}
 +
 +func (s *dataRetentionService) AddTeamsToPolicy(policyID string, teamIDs []string) *model.AppError {
-+	if _, appErr := s.existingPolicy("AddTeamsToPolicy", policyID); appErr != nil {
++	policy, appErr := s.existingPolicy("AddTeamsToPolicy", policyID)
++	if appErr != nil {
 +		return appErr
 +	}
 +	if appErr := s.validateTeams("AddTeamsToPolicy", teamIDs); appErr != nil {
++		return appErr
++	}
++	change := unchangedPeriod(policy)
++	change.AddedTeams = len(teamIDs)
++	if appErr := s.pauseIfStricter("AddTeamsToPolicy", change); appErr != nil {
 +		return appErr
 +	}
 +	return mapRetentionAddError("AddTeamsToPolicy", s.store().AddTeams(policyID, teamIDs))
 +}
 +
 +func (s *dataRetentionService) RemoveTeamsFromPolicy(policyID string, teamIDs []string) *model.AppError {
-+	if _, appErr := s.existingPolicy("RemoveTeamsFromPolicy", policyID); appErr != nil {
++	policy, appErr := s.existingPolicy("RemoveTeamsFromPolicy", policyID)
++	if appErr != nil {
++		return appErr
++	}
++	change := unchangedPeriod(policy)
++	change.RemovedTeams = len(teamIDs)
++	if appErr := s.pauseIfStricter("RemoveTeamsFromPolicy", change); appErr != nil {
 +		return appErr
 +	}
 +	if err := s.store().RemoveTeams(policyID, teamIDs); err != nil {
@@ -1706,17 +2119,35 @@ index 000000000000..4b8749b67516
 +}
 +
 +func (s *dataRetentionService) AddChannelsToPolicy(policyID string, channelIDs []string) *model.AppError {
-+	if _, appErr := s.existingPolicy("AddChannelsToPolicy", policyID); appErr != nil {
++	policy, appErr := s.existingPolicy("AddChannelsToPolicy", policyID)
++	if appErr != nil {
 +		return appErr
 +	}
-+	if appErr := s.validateChannels("AddChannelsToPolicy", channelIDs); appErr != nil {
++	channels, appErr := s.validateChannels("AddChannelsToPolicy", channelIDs)
++	if appErr != nil {
++		return appErr
++	}
++	change := unchangedPeriod(policy)
++	change.AddedChannelTeams = channelTeams(channels)
++	if appErr := s.pauseIfStricter("AddChannelsToPolicy", change); appErr != nil {
 +		return appErr
 +	}
 +	return mapRetentionAddError("AddChannelsToPolicy", s.store().AddChannels(policyID, channelIDs))
 +}
 +
 +func (s *dataRetentionService) RemoveChannelsFromPolicy(policyID string, channelIDs []string) *model.AppError {
-+	if _, appErr := s.existingPolicy("RemoveChannelsFromPolicy", policyID); appErr != nil {
++	policy, appErr := s.existingPolicy("RemoveChannelsFromPolicy", policyID)
++	if appErr != nil {
++		return appErr
++	}
++	channels, err := s.app.Srv().Store().Channel().GetMany(channelIDs, false)
++	var nfErr *store.ErrNotFound
++	if err != nil && !errors.As(err, &nfErr) {
++		return retentionInternal("RemoveChannelsFromPolicy", err)
++	}
++	change := unchangedPeriod(policy)
++	change.RemovedChannelTeams = channelTeams(channels)
++	if appErr := s.pauseIfStricter("RemoveChannelsFromPolicy", change); appErr != nil {
 +		return appErr
 +	}
 +	if err := s.store().RemoveChannels(policyID, channelIDs); err != nil {
@@ -1749,18 +2180,18 @@ index 000000000000..4b8749b67516
 +	return &model.RetentionPolicyForChannelList{Policies: policies, TotalCount: count}, nil
 +}
 +
-+func (s *dataRetentionService) validate(where string, p *model.RetentionPolicyWithTeamAndChannelIDs, onCreate bool) *model.AppError {
++func (s *dataRetentionService) validate(where string, p *model.RetentionPolicyWithTeamAndChannelIDs, onCreate bool) ([]*model.Channel, *model.AppError) {
 +	if onCreate || p.DisplayName != "" {
 +		name := strings.TrimSpace(p.DisplayName)
 +		if name == "" || utf8.RuneCountInString(p.DisplayName) > retentionPolicyNameMax {
-+			return retentionInvalid(where, fmt.Sprintf("display_name must be 1 to %d characters", retentionPolicyNameMax))
++			return nil, retentionInvalid(where, fmt.Sprintf("display_name must be 1 to %d characters", retentionPolicyNameMax))
 +		}
 +	}
 +	if !data_retention.ValidatePostDuration(p.PostDurationDays, onCreate) {
-+		return retentionInvalid(where, fmt.Sprintf("post_duration must be -1 or 1 to %d days", data_retention.MaxRetentionDays))
++		return nil, retentionInvalid(where, fmt.Sprintf("post_duration must be -1 or 1 to %d days", data_retention.MaxRetentionDays))
 +	}
 +	if appErr := s.validateTeams(where, p.TeamIDs); appErr != nil {
-+		return appErr
++		return nil, appErr
 +	}
 +	return s.validateChannels(where, p.ChannelIDs)
 +}
@@ -1789,25 +2220,25 @@ index 000000000000..4b8749b67516
 +	return nil
 +}
 +
-+func (s *dataRetentionService) validateChannels(where string, channelIDs []string) *model.AppError {
++func (s *dataRetentionService) validateChannels(where string, channelIDs []string) ([]*model.Channel, *model.AppError) {
 +	if len(channelIDs) == 0 {
-+		return nil
++		return nil, nil
 +	}
 +	want := uniqueIDs(channelIDs)
 +	channels, err := s.app.Srv().Store().Channel().GetMany(channelIDs, false)
 +	var nfErr *store.ErrNotFound
 +	if err != nil && !errors.As(err, &nfErr) {
-+		return retentionInternal(where, err)
++		return nil, retentionInternal(where, err)
 +	}
 +	if len(channels) != len(want) {
-+		return retentionInvalid(where, "channel_ids contains an unknown channel")
++		return nil, retentionInvalid(where, "channel_ids contains an unknown channel")
 +	}
 +	for _, c := range channels {
 +		if c.IsGroupOrDirect() {
-+			return retentionInvalid(where, "direct and group message channels cannot be added to a policy: "+c.Id)
++			return nil, retentionInvalid(where, "direct and group message channels cannot be added to a policy: "+c.Id)
 +		}
 +	}
-+	return nil
++	return channels, nil
 +}
 +
 +func mapRetentionAddError(where string, err error) *model.AppError {
@@ -1820,6 +2251,145 @@ index 000000000000..4b8749b67516
 +		return model.NewAppError(where, retentionPolicyInvalidID, nil, "", http.StatusBadRequest).Wrap(err)
 +	}
 +	return retentionInternal(where, err)
++}
++
++// pauseIfStricter pauses scheduled deletion before a policy change that can delete posts sooner, so
++// the change applies on a schedule only after an administrator's next manual run.
++func (s *dataRetentionService) pauseIfStricter(where string, change data_retention.PolicyChange) *model.AppError {
++	cfg := s.app.Config().DataRetentionSettings
++	global := data_retention.GlobalPeriod(*cfg.EnableMessageDeletion, cfg.MessageRetentionHours, cfg.MessageRetentionDays)
++	var teamPeriods map[string]data_retention.Period
++	if len(change.AddedChannelTeams) > 0 || len(change.RemovedChannelTeams) > 0 {
++		var err error
++		if teamPeriods, err = s.teamPeriods(); err != nil {
++			return retentionInternal(where, err)
++		}
++	}
++	if !change.Stricter(global, teamPeriods) {
++		return nil
++	}
++	if err := data_retention.MarkPoliciesStricter(s.app.Srv().Store().System()); err != nil {
++		return retentionInternal(where, err)
++	}
++	s.app.Log().Info("Data retention: policy change deletes posts sooner; scheduled deletion paused until the next manual run", mlog.String("operation", where))
++	return nil
++}
++
++func unchangedPeriod(policy *model.RetentionPolicyWithTeamAndChannelCounts) data_retention.PolicyChange {
++	period := data_retention.PolicyPeriod(policy.PostDurationDays)
++	return data_retention.PolicyChange{OldPeriod: period, NewPeriod: period}
++}
++
++func (s *dataRetentionService) patchChange(old *model.RetentionPolicyWithTeamAndChannelCounts, patch *model.RetentionPolicyWithTeamAndChannelIDs, channels []*model.Channel) (data_retention.PolicyChange, error) {
++	change := unchangedPeriod(old)
++	if patch.PostDurationDays != nil {
++		change.NewPeriod = data_retention.PolicyPeriod(patch.PostDurationDays)
++	}
++	if patch.TeamIDs != nil {
++		teams, err := s.policyTeams(old)
++		if err != nil {
++			return change, err
++		}
++		current, next := uniqueIDs(teams), uniqueIDs(patch.TeamIDs)
++		for id := range next {
++			if !current[id] {
++				change.AddedTeams++
++			}
++		}
++		for id := range current {
++			if !next[id] {
++				change.RemovedTeams++
++			}
++		}
++	}
++	if patch.ChannelIDs != nil {
++		current, err := s.policyChannels(old)
++		if err != nil {
++			return change, err
++		}
++		next := map[string]bool{}
++		for _, c := range channels {
++			next[c.Id] = true
++			if _, ok := current[c.Id]; !ok {
++				change.AddedChannelTeams = append(change.AddedChannelTeams, c.TeamId)
++			}
++		}
++		for id, team := range current {
++			if !next[id] {
++				change.RemovedChannelTeams = append(change.RemovedChannelTeams, team)
++			}
++		}
++	}
++	return change, nil
++}
++
++func channelTeams(channels []*model.Channel) []string {
++	teams := make([]string, 0, len(channels))
++	for _, c := range channels {
++		teams = append(teams, c.TeamId)
++	}
++	return teams
++}
++
++func (s *dataRetentionService) teamPeriods() (map[string]data_retention.Period, error) {
++	periods := map[string]data_retention.Period{}
++	for offset := 0; ; offset += retentionPage {
++		policies, err := s.store().GetAll(offset, retentionPage)
++		if err != nil {
++			return nil, err
++		}
++		for _, p := range policies {
++			teams, err := s.policyTeams(p)
++			if err != nil {
++				return nil, err
++			}
++			for _, id := range teams {
++				periods[id] = data_retention.PolicyPeriod(p.PostDurationDays)
++			}
++		}
++		if len(policies) < retentionPage {
++			return periods, nil
++		}
++	}
++}
++
++func (s *dataRetentionService) policyTeams(p *model.RetentionPolicyWithTeamAndChannelCounts) ([]string, error) {
++	var ids []string
++	for offset := 0; int64(offset) < p.TeamCount; offset += retentionPage {
++		teams, err := s.store().GetTeams(p.ID, offset, retentionPage)
++		if err != nil {
++			return nil, err
++		}
++		for _, t := range teams {
++			ids = append(ids, t.Id)
++		}
++		if len(teams) < retentionPage {
++			break
++		}
++	}
++	return ids, nil
++}
++
++// policyChannels maps each channel of the policy to its team.
++func (s *dataRetentionService) policyChannels(p *model.RetentionPolicyWithTeamAndChannelCounts) (map[string]string, error) {
++	channels := map[string]string{}
++	for offset := 0; int64(offset) < p.ChannelCount; offset += retentionPage {
++		page, err := s.store().GetChannels(p.ID, offset, retentionPage)
++		if err != nil {
++			return nil, err
++		}
++		for _, c := range page {
++			channels[c.Id] = c.TeamId
++		}
++		if len(page) < retentionPage {
++			break
++		}
++	}
++	if int64(len(channels)) < p.ChannelCount {
++		// GetChannels joins Teams, so it omits direct and group message rows; they follow the global period.
++		channels[""] = ""
++	}
++	return channels, nil
 +}
 diff --git a/server/channels/app/file.go b/server/channels/app/file.go
 index 0a5f5910a66c..0c72bb5d6eb8 100644
@@ -1868,18 +2438,193 @@ index 067ff1ed9e19..023d6a2278f8 100644
  	default:
  		return a.Srv().Jobs.CreateJob(rctx, job.Type, job.Data)
  	}
-diff --git a/server/channels/jobs/data_retention/plan.go b/server/channels/jobs/data_retention/plan.go
+diff --git a/server/channels/jobs/data_retention/confirm.go b/server/channels/jobs/data_retention/confirm.go
 new file mode 100644
-index 000000000000..22b8fa782bd6
+index 000000000000..2d2feb4603f3
 --- /dev/null
-+++ b/server/channels/jobs/data_retention/plan.go
-@@ -0,0 +1,161 @@
++++ b/server/channels/jobs/data_retention/confirm.go
+@@ -0,0 +1,85 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
 +package data_retention
 +
 +import (
++	"errors"
++	"fmt"
++
++	"github.com/mattermost/mattermost/server/public/model"
++	"github.com/mattermost/mattermost/server/v8/channels/store"
++)
++
++// confirmation is what a completed manual run approved. It is stored as JSON under ArmedSystemKey,
++// and scheduled runs go ahead only while the current settings delete nothing sooner than it.
++type confirmation struct {
++	JobID          string `json:"job_id"`
++	MessagePeriod  Period `json:"message_period_hours"`
++	FilePeriod     Period `json:"file_period_hours"`
++	PreservePinned bool   `json:"preserve_pinned"`
++	PolicyEpoch    string `json:"policy_epoch"`
++}
++
++func currentConfirmation(systems store.SystemStore, s *model.DataRetentionSettings) (confirmation, error) {
++	c := confirmation{
++		MessagePeriod:  GlobalPeriod(*s.EnableMessageDeletion, s.MessageRetentionHours, s.MessageRetentionDays),
++		FilePeriod:     GlobalPeriod(*s.EnableFileDeletion, s.FileRetentionHours, s.FileRetentionDays),
++		PreservePinned: *s.PreservePinnedPosts,
++	}
++	epoch, err := systems.GetByName(PolicyEpochSystemKey)
++	if err != nil {
++		var nfErr *store.ErrNotFound
++		if !errors.As(err, &nfErr) {
++			return c, fmt.Errorf("failed to read the policy epoch: %w", err)
++		}
++		return c, nil
++	}
++	c.PolicyEpoch = epoch.Value
++	return c, nil
++}
++
++func (c confirmation) covers(current confirmation) bool {
++	return current.MessagePeriod >= c.MessagePeriod &&
++		current.FilePeriod >= c.FilePeriod &&
++		(current.PreservePinned || !c.PreservePinned) &&
++		current.PolicyEpoch == c.PolicyEpoch
++}
++
++// MarkPoliciesStricter pauses scheduled runs until the next completed manual run.
++func MarkPoliciesStricter(systems store.SystemStore) error {
++	return systems.SaveOrUpdate(&model.System{Name: PolicyEpochSystemKey, Value: model.NewId()})
++}
++
++// PolicyChange is one edit of a custom policy: its period before and after, and the teams and
++// channels it gains or loses. Each channel is given by its team ID, "" for direct and group messages.
++type PolicyChange struct {
++	OldPeriod, NewPeriod                   Period
++	AddedTeams, RemovedTeams               int
++	AddedChannelTeams, RemovedChannelTeams []string
++}
++
++// Stricter reports whether the change can delete a post sooner than before. Outside every policy a
++// team follows the global period; a channel follows its team's policy, else the global period.
++func (c PolicyChange) Stricter(global Period, teamPeriods map[string]Period) bool {
++	fallback := func(teamID string) Period {
++		if p, ok := teamPeriods[teamID]; ok {
++			return p
++		}
++		return global
++	}
++	if c.NewPeriod < c.OldPeriod || (c.AddedTeams > 0 && c.NewPeriod < global) || (c.RemovedTeams > 0 && global < c.OldPeriod) {
++		return true
++	}
++	for _, team := range c.AddedChannelTeams {
++		if c.NewPeriod < fallback(team) {
++			return true
++		}
++	}
++	for _, team := range c.RemovedChannelTeams {
++		if fallback(team) < c.OldPeriod {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/server/channels/jobs/data_retention/confirm_test.go b/server/channels/jobs/data_retention/confirm_test.go
+new file mode 100644
+index 000000000000..554e0d54f088
+--- /dev/null
++++ b/server/channels/jobs/data_retention/confirm_test.go
+@@ -0,0 +1,77 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package data_retention
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/assert"
++
++	"github.com/mattermost/mattermost/server/public/model"
++)
++
++func TestPeriods(t *testing.T) {
++	assert.Equal(t, Forever, GlobalPeriod(false, model.NewPointer(24), nil))
++	assert.Equal(t, Period(24), GlobalPeriod(true, model.NewPointer(24), model.NewPointer(10)))
++	assert.Equal(t, Period(240), GlobalPeriod(true, model.NewPointer(0), model.NewPointer(10)))
++	assert.Equal(t, Period(365*24), GlobalPeriod(true, nil, nil))
++	assert.Equal(t, Forever, GlobalPeriod(true, model.NewPointer(876_001), nil), "longer than 100 years keeps forever")
++
++	assert.Equal(t, Forever, PolicyPeriod(model.NewPointer[int64](-1)))
++	assert.Equal(t, Forever, PolicyPeriod(model.NewPointer[int64](200_000_000_000)))
++	assert.Equal(t, Period(24), PolicyPeriod(model.NewPointer[int64](1)))
++}
++
++func TestPolicyChangeStricter(t *testing.T) {
++	const global = Period(240)
++	teams := map[string]Period{"short": 120, "forever": Forever}
++	cases := []struct {
++		name     string
++		change   PolicyChange
++		stricter bool
++	}{
++		{"period shortened", PolicyChange{OldPeriod: 480, NewPeriod: 240}, true},
++		{"keep forever becomes limited", PolicyChange{OldPeriod: Forever, NewPeriod: 480}, true},
++		{"period lengthened", PolicyChange{OldPeriod: 240, NewPeriod: 480}, false},
++		{"limited becomes keep forever", PolicyChange{OldPeriod: 240, NewPeriod: Forever}, false},
++		{"team joins a policy shorter than the global period", PolicyChange{OldPeriod: 120, NewPeriod: 120, AddedTeams: 1}, true},
++		{"team joins a policy as long as the global period", PolicyChange{OldPeriod: 240, NewPeriod: 240, AddedTeams: 1}, false},
++		{"team leaves a policy longer than the global period", PolicyChange{OldPeriod: 480, NewPeriod: 480, RemovedTeams: 1}, true},
++		{"team leaves a policy shorter than the global period", PolicyChange{OldPeriod: 120, NewPeriod: 120, RemovedTeams: 1}, false},
++		{"channel joins a policy shorter than its team policy", PolicyChange{OldPeriod: 72, NewPeriod: 72, AddedChannelTeams: []string{"short"}}, true},
++		{"channel joins a policy longer than its team policy", PolicyChange{OldPeriod: 168, NewPeriod: 168, AddedChannelTeams: []string{"short"}}, false},
++		{"channel without a team policy joins a policy longer than the global period", PolicyChange{OldPeriod: 480, NewPeriod: 480, AddedChannelTeams: []string{"none"}}, false},
++		{"channel in a keep-forever team joins a limited policy", PolicyChange{OldPeriod: 480, NewPeriod: 480, AddedChannelTeams: []string{"forever"}}, true},
++		{"channel leaves for a shorter team policy", PolicyChange{OldPeriod: 168, NewPeriod: 168, RemovedChannelTeams: []string{"short"}}, true},
++		{"channel leaves for a keep-forever team policy", PolicyChange{OldPeriod: 24, NewPeriod: 24, RemovedChannelTeams: []string{"forever"}}, false},
++		{"direct messages leave a keep-forever policy", PolicyChange{OldPeriod: Forever, NewPeriod: Forever, RemovedChannelTeams: []string{""}}, true},
++	}
++	for _, tc := range cases {
++		assert.Equal(t, tc.stricter, tc.change.Stricter(global, teams), tc.name)
++	}
++}
++
++func TestConfirmationCovers(t *testing.T) {
++	confirmed := confirmation{MessagePeriod: 240, FilePeriod: Forever, PreservePinned: true, PolicyEpoch: "a"}
++	cases := []struct {
++		name    string
++		current func(c *confirmation)
++		covered bool
++	}{
++		{"unchanged", func(c *confirmation) {}, true},
++		{"message period longer", func(c *confirmation) { c.MessagePeriod = 480 }, true},
++		{"message deletion off", func(c *confirmation) { c.MessagePeriod = Forever }, true},
++		{"message period shorter", func(c *confirmation) { c.MessagePeriod = 120 }, false},
++		{"file deletion on", func(c *confirmation) { c.FilePeriod = 24_000 }, false},
++		{"pinned posts no longer preserved", func(c *confirmation) { c.PreservePinned = false }, false},
++		{"a policy got stricter", func(c *confirmation) { c.PolicyEpoch = "b" }, false},
++	}
++	for _, tc := range cases {
++		current := confirmed
++		current.JobID = "other"
++		tc.current(&current)
++		assert.Equal(t, tc.covered, confirmed.covers(current), tc.name)
++	}
++	assert.True(t, confirmation{MessagePeriod: Forever, FilePeriod: Forever}.covers(confirmation{MessagePeriod: Forever, FilePeriod: Forever, PreservePinned: true}), "preserving pinned posts is looser")
++}
+diff --git a/server/channels/jobs/data_retention/plan.go b/server/channels/jobs/data_retention/plan.go
+new file mode 100644
+index 000000000000..2e697a0c617d
+--- /dev/null
++++ b/server/channels/jobs/data_retention/plan.go
+@@ -0,0 +1,180 @@
++// Copyright (c) 2026-present the Mattermax authors.
++// See LICENSE.txt for license information.
++
++package data_retention
++
++import (
++	"math"
 +	"path"
 +	"strings"
 +	"time"
@@ -1891,7 +2636,8 @@ index 000000000000..22b8fa782bd6
 +	MaxRetentionDays  = 36_500
 +	maxRetentionHours = MaxRetentionDays * 24
 +
-+	ArmedSystemKey = "MattermaxDataRetentionArmedBy"
++	ArmedSystemKey       = "MattermaxDataRetentionArmedBy"
++	PolicyEpochSystemKey = "MattermaxDataRetentionPolicyEpoch"
 +
 +	TriggerKey      = "trigger"
 +	TriggerManual   = "manual"
@@ -1910,26 +2656,43 @@ index 000000000000..22b8fa782bd6
 +	Pause          time.Duration
 +}
 +
-+func CutoffFor(enabled bool, hours, days *int, now int64) int64 {
++// Period is how long data is kept, in hours.
++type Period int64
++
++const Forever Period = math.MaxInt64
++
++func GlobalPeriod(enabled bool, hours, days *int) Period {
 +	if !enabled {
-+		return 0
++		return Forever
 +	}
-+	var h int64
 +	switch {
 +	case hours != nil && *hours > 0:
 +		if *hours > maxRetentionHours {
-+			return 0
++			return Forever
 +		}
-+		h = int64(*hours)
++		return Period(*hours)
 +	case days != nil && *days > 0:
 +		if *days > MaxRetentionDays {
-+			return 0
++			return Forever
 +		}
-+		h = int64(*days) * 24
-+	default:
-+		h = 365 * 24
++		return Period(*days) * 24
 +	}
-+	c := now - h*int64(time.Hour/time.Millisecond)
++	return 365 * 24
++}
++
++func PolicyPeriod(days *int64) Period {
++	if days == nil || *days < 0 || *days > MaxRetentionDays {
++		return Forever
++	}
++	return Period(*days) * 24
++}
++
++func CutoffFor(enabled bool, hours, days *int, now int64) int64 {
++	p := GlobalPeriod(enabled, hours, days)
++	if p == Forever {
++		return 0
++	}
++	c := now - int64(p)*int64(time.Hour/time.Millisecond)
 +	if c <= 0 || c >= now {
 +		return 0
 +	}
@@ -2389,16 +3152,17 @@ index 000000000000..2118847ee5ad
 +}
 diff --git a/server/channels/jobs/data_retention/worker.go b/server/channels/jobs/data_retention/worker.go
 new file mode 100644
-index 000000000000..d630587ef87d
+index 000000000000..711ed45c5393
 --- /dev/null
 +++ b/server/channels/jobs/data_retention/worker.go
-@@ -0,0 +1,785 @@
+@@ -0,0 +1,843 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
 +package data_retention
 +
 +import (
++	"encoding/json"
 +	"errors"
 +	"fmt"
 +	"net/http"
@@ -2417,6 +3181,8 @@ index 000000000000..d630587ef87d
 +
 +const (
 +	pausedWarning    = "Scheduled deletion is paused until an administrator selects Run Deletion Job Now. Nothing was deleted."
++	stricterWarning  = "Retention became stricter after the last manual run. " + pausedWarning
++	stoppedWarning   = "Retention became stricter during this run, so it stopped. Scheduled deletion is paused until an administrator selects Run Deletion Job Now."
 +	notArmedWarning  = "Deletion ran, but the nightly schedule could not be enabled; run again."
 +	filesFailedFmt   = "%d files could not be removed from storage and will be retried on the next run."
 +	outboxFailedFmt  = "%d batches of deleted posts kept their attachments because storage removal failed; they will be retried on the next run."
@@ -2428,6 +3194,7 @@ index 000000000000..d630587ef87d
 +	errYielded  = errors.New("yielded to an older run")
 +	errCanceled = errors.New("canceled")
 +	errLost     = errors.New("job is no longer in progress")
++	errStricter = errors.New("retention became stricter")
 +)
 +
 +type Worker struct {
@@ -2604,6 +3371,8 @@ index 000000000000..d630587ef87d
 +		if appErr := w.jobServer.SetJobCanceled(job); appErr != nil {
 +			logger.Warn("Data retention: failed to publish canceled status", mlog.Err(appErr))
 +		}
++	case errors.Is(runErr, errStricter):
++		w.complete(job, stoppedWarning, true, logger, r.counters.fields())
 +	case errors.Is(runErr, errStopped), errors.Is(runErr, errYielded):
 +		logger.Info("Data retention: setting job back to pending", mlog.String("reason", runErr.Error()))
 +		w.requeue(job, logger)
@@ -2614,7 +3383,7 @@ index 000000000000..d630587ef87d
 +			logger.Warn("Data retention: failed to write error status", mlog.Err(setErr))
 +		}
 +	default:
-+		w.complete(job, warning, r.paused, logger, r.counters.fields())
++		w.complete(job, warning, r.paused != "", logger, r.counters.fields())
 +	}
 +}
 +
@@ -2687,7 +3456,7 @@ index 000000000000..d630587ef87d
 +	fileObjectsRemoved          int64
 +	filesFailed                 int64
 +	filesSharedKept             int64
-+	burnOnReadFilesDeleted      int64
++	filesDeletedWithPosts       int64
 +}
 +
 +func (c *counters) named() []struct {
@@ -2708,7 +3477,7 @@ index 000000000000..d630587ef87d
 +		{"file_objects_removed", c.fileObjectsRemoved},
 +		{"files_failed", c.filesFailed},
 +		{"files_shared_kept", c.filesSharedKept},
-+		{"burn_on_read_files_deleted", c.burnOnReadFilesDeleted},
++		{"files_deleted_with_posts", c.filesDeletedWithPosts},
 +	}
 +}
 +
@@ -2735,10 +3504,11 @@ index 000000000000..d630587ef87d
 +	backend filestore.FileBackend
 +
 +	plan          runPlan
++	settings      confirmation
 +	phase         string
 +	counters      counters
 +	changed       bool
-+	paused        bool
++	paused        string
 +	outboxSkipped map[string]bool
 +
 +	removedSinceStep int
@@ -2748,8 +3518,8 @@ index 000000000000..d630587ef87d
 +	if err := r.preflight(); err != nil {
 +		return "", err
 +	}
-+	if r.paused {
-+		return pausedWarning, nil
++	if r.paused != "" {
++		return r.paused, nil
 +	}
 +
 +	phases := []struct {
@@ -2788,13 +3558,23 @@ index 000000000000..d630587ef87d
 +		warning = fmt.Sprintf(outboxFailedFmt, len(r.outboxSkipped))
 +	}
 +
-+	if r.job.Data[TriggerKey] == TriggerManual {
-+		if err := r.w.store.System().SaveOrUpdate(&model.System{Name: ArmedSystemKey, Value: r.job.Id}); err != nil {
++	if r.manual() {
++		if err := r.arm(); err != nil {
 +			r.logger.Error("Data retention: failed to enable the nightly schedule", mlog.Err(err))
 +			warning = notArmedWarning
 +		}
 +	}
 +	return warning, nil
++}
++
++func (r *run) arm() error {
++	confirmed := r.settings
++	confirmed.JobID = r.job.Id
++	value, err := json.Marshal(confirmed)
++	if err != nil {
++		return err
++	}
++	return r.w.store.System().SaveOrUpdate(&model.System{Name: ArmedSystemKey, Value: string(value)})
 +}
 +
 +func (r *run) preflight() error {
@@ -2820,21 +3600,49 @@ index 000000000000..d630587ef87d
 +		return fmt.Errorf("policy %q has duration %s; allowed: -1 or 1..%d days. Nothing was deleted", p.DisplayName, d, MaxRetentionDays)
 +	}
 +
-+	r.plan = planFor(&r.w.jobServer.Config().DataRetentionSettings, model.GetMillis())
++	settings := &r.w.jobServer.Config().DataRetentionSettings
++	r.plan = planFor(settings, model.GetMillis())
 +	r.job.Data["now"] = strconv.FormatInt(r.plan.Now, 10)
 +	r.job.Data["message_cutoff"] = strconv.FormatInt(r.plan.MessageCutoff, 10)
 +	r.job.Data["file_cutoff"] = strconv.FormatInt(r.plan.FileCutoff, 10)
-+	if r.job.Data[TriggerKey] != TriggerManual {
-+		if _, err := r.w.store.System().GetByName(ArmedSystemKey); err != nil {
-+			var nfErr *store.ErrNotFound
-+			if !errors.As(err, &nfErr) {
-+				return fmt.Errorf("failed to read the schedule flag: %w", err)
-+			}
-+			r.paused = true
++	var err error
++	if r.settings, err = currentConfirmation(r.w.store.System(), settings); err != nil {
++		return err
++	}
++	if !r.manual() {
++		if r.paused, err = r.schedulePause(r.settings); err != nil {
++			return err
++		}
++		if r.paused != "" {
 +			return nil
 +		}
 +	}
 +	return r.step()
++}
++
++func (r *run) manual() bool {
++	return r.job.Data[TriggerKey] == TriggerManual
++}
++
++// schedulePause returns why a scheduled run must not delete, or "" when it may.
++func (r *run) schedulePause(current confirmation) (string, error) {
++	sys, err := r.w.store.System().GetByName(ArmedSystemKey)
++	if err != nil {
++		var nfErr *store.ErrNotFound
++		if !errors.As(err, &nfErr) {
++			return "", fmt.Errorf("failed to read the schedule flag: %w", err)
++		}
++		return pausedWarning, nil
++	}
++	var confirmed confirmation
++	if err := json.Unmarshal([]byte(sys.Value), &confirmed); err != nil {
++		r.logger.Warn("Data retention: unreadable schedule flag; pausing until the next manual run", mlog.Err(err))
++		return pausedWarning, nil
++	}
++	if !confirmed.covers(current) {
++		return stricterWarning, nil
++	}
++	return "", nil
 +}
 +
 +func (r *run) step() error {
@@ -2870,6 +3678,21 @@ index 000000000000..d630587ef87d
 +	}
 +	if shouldYield(r.job, others, model.GetMillis()) {
 +		return errYielded
++	}
++
++	if r.manual() {
++		return nil
++	}
++	current, err := currentConfirmation(r.w.store.System(), &r.w.jobServer.Config().DataRetentionSettings)
++	if err != nil {
++		return err
++	}
++	pause, err := r.schedulePause(current)
++	if err != nil {
++		return err
++	}
++	if pause != "" {
++		return errStricter
 +	}
 +	return nil
 +}
@@ -2928,13 +3751,13 @@ index 000000000000..d630587ef87d
 +					return err
 +				}
 +			}
-+			ok, err := r.wipeBurnOnRead(row)
++			ok, err := r.removeAttachments(row)
 +			if err != nil {
 +				return err
 +			}
 +			if !ok {
 +				r.outboxSkipped[row.Id] = true
-+				r.logger.Warn("Data retention: burn-on-read attachments could not be removed; keeping the batch for the next run", mlog.String("outbox_id", row.Id))
++				r.logger.Warn("Data retention: attachments of deleted posts could not be removed; keeping the batch for the next run", mlog.String("outbox_id", row.Id))
 +				continue
 +			}
 +			if err := r.w.store.RetentionPolicy().DeleteDependentsForOutboxRow(row, r.plan.Now); err != nil {
@@ -2946,28 +3769,26 @@ index 000000000000..d630587ef87d
 +	}
 +}
 +
-+func (r *run) wipeBurnOnRead(row *model.RetentionIdsForDeletion) (bool, error) {
-+	ids, err := r.w.store.RetentionPolicy().GetBurnOnReadIds(row.Ids)
++func (r *run) removeAttachments(row *model.RetentionIdsForDeletion) (bool, error) {
++	files, err := r.w.store.FileInfo().GetForRetentionByPostIds(row.Ids)
++	if err != nil {
++		return false, fmt.Errorf("failed to read attachments of deleted posts: %w", err)
++	}
++	if err := r.w.store.FileInfo().SoftDeleteByIds(fileIDs(files), r.plan.Now); err != nil {
++		return false, fmt.Errorf("failed to hide attachments of deleted posts: %w", err)
++	}
++	ok, err := r.removeFiles(files, &r.counters.filesDeletedWithPosts)
++	if err != nil {
++		return false, err
++	}
++	burnOnRead, err := r.w.store.RetentionPolicy().GetBurnOnReadIds(row.Ids)
 +	if err != nil {
 +		return false, fmt.Errorf("failed to find burn-on-read posts: %w", err)
 +	}
-+	allOK := true
-+	for _, postID := range ids {
-+		files, err := r.w.store.FileInfo().GetForPost(postID, true, true, false)
-+		if err != nil {
-+			return false, fmt.Errorf("failed to read burn-on-read attachments: %w", err)
-+		}
-+		if err := r.w.store.FileInfo().SoftDeleteByIds(fileIDs(files), r.plan.Now); err != nil {
-+			return false, fmt.Errorf("failed to hide burn-on-read attachments: %w", err)
-+		}
-+		ok, err := r.removeFiles(files, &r.counters.burnOnReadFilesDeleted)
-+		if err != nil {
-+			return false, err
-+		}
-+		allOK = allOK && ok
++	for _, postID := range burnOnRead {
 +		r.w.store.TemporaryPost().InvalidateTemporaryPost(postID)
 +	}
-+	return allOK, nil
++	return ok, nil
 +}
 +
 +func (r *run) posts() error {
@@ -3306,10 +4127,10 @@ index 000000000000..4b5dbf4ebb9f
 +	mockStore.FileInfo().(*mocks.FileInfoStore).AssertNumberOfCalls(t, "GetForPost", 2)
 +}
 diff --git a/server/channels/store/retrylayer/retrylayer.go b/server/channels/store/retrylayer/retrylayer.go
-index d46178ce78a1..6dae738b3833 100644
+index d46178ce78a1..468cfba8d54e 100644
 --- a/server/channels/store/retrylayer/retrylayer.go
 +++ b/server/channels/store/retrylayer/retrylayer.go
-@@ -5866,6 +5866,27 @@ func (s *RetryLayerFileInfoStore) GetForPost(postID string, readFromMaster bool,
+@@ -5866,6 +5866,48 @@ func (s *RetryLayerFileInfoStore) GetForPost(postID string, readFromMaster bool,
  
  }
  
@@ -3334,10 +4155,31 @@ index d46178ce78a1..6dae738b3833 100644
 +
 +}
 +
++func (s *RetryLayerFileInfoStore) GetForRetentionByPostIds(postIDs []string) ([]*model.FileInfo, error) {
++
++	tries := 0
++	for {
++		result, err := s.FileInfoStore.GetForRetentionByPostIds(postIDs)
++		if err == nil {
++			return result, nil
++		}
++		if !isRepeatableError(err) {
++			return result, err
++		}
++		tries++
++		if tries >= 3 {
++			err = errors.Wrap(err, "giving up after 3 consecutive repeatable transaction failures")
++			return result, err
++		}
++		timepkg.Sleep(100 * timepkg.Millisecond)
++	}
++
++}
++
  func (s *RetryLayerFileInfoStore) GetForUser(userID string) ([]*model.FileInfo, error) {
  
  	tries := 0
-@@ -5908,6 +5929,27 @@ func (s *RetryLayerFileInfoStore) GetFromMaster(id string) (*model.FileInfo, err
+@@ -5908,6 +5950,27 @@ func (s *RetryLayerFileInfoStore) GetFromMaster(id string) (*model.FileInfo, err
  
  }
  
@@ -3365,7 +4207,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerFileInfoStore) GetStorageUsage(allowFromCache bool, includeDeleted bool) (int64, error) {
  
  	tries := 0
-@@ -6019,6 +6061,27 @@ func (s *RetryLayerFileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime
+@@ -6019,6 +6082,27 @@ func (s *RetryLayerFileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime
  
  }
  
@@ -3393,7 +4235,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerFileInfoStore) PermanentDeleteByUser(rctx request.CTX, userID string) (int64, error) {
  
  	tries := 0
-@@ -6124,6 +6187,27 @@ func (s *RetryLayerFileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (
+@@ -6124,6 +6208,27 @@ func (s *RetryLayerFileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (
  
  }
  
@@ -3421,7 +4263,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerFileInfoStore) Search(rctx request.CTX, paramsList []*model.SearchParams, userID string, teamID string, page int, perPage int) (*model.FileInfoList, error) {
  
  	tries := 0
-@@ -6166,6 +6250,27 @@ func (s *RetryLayerFileInfoStore) SetContent(rctx request.CTX, fileID string, co
+@@ -6166,6 +6271,27 @@ func (s *RetryLayerFileInfoStore) SetContent(rctx request.CTX, fileID string, co
  
  }
  
@@ -3449,7 +4291,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerFileInfoStore) Upsert(rctx request.CTX, info *model.FileInfo) (*model.FileInfo, error) {
  
  	tries := 0
-@@ -7699,6 +7804,27 @@ func (s *RetryLayerJobStore) UpdateOptimistically(job *model.Job, currentStatus
+@@ -7699,6 +7825,27 @@ func (s *RetryLayerJobStore) UpdateOptimistically(job *model.Job, currentStatus
  
  }
  
@@ -3477,7 +4319,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerJobStore) UpdateStatus(id string, status string) (*model.Job, error) {
  
  	tries := 0
-@@ -12664,6 +12790,27 @@ func (s *RetryLayerRetentionPolicyStore) Delete(id string) error {
+@@ -12664,6 +12811,27 @@ func (s *RetryLayerRetentionPolicyStore) Delete(id string) error {
  
  }
  
@@ -3505,7 +4347,7 @@ index d46178ce78a1..6dae738b3833 100644
  func (s *RetryLayerRetentionPolicyStore) DeleteOrphanedRows(limit int) (int64, error) {
  
  	tries := 0
-@@ -12727,6 +12874,27 @@ func (s *RetryLayerRetentionPolicyStore) GetAll(offset int, limit int) ([]*model
+@@ -12727,6 +12895,27 @@ func (s *RetryLayerRetentionPolicyStore) GetAll(offset int, limit int) ([]*model
  
  }
  
@@ -3578,10 +4420,10 @@ index 000000000000..4c995b97e121
 +}
 diff --git a/server/channels/store/sqlstore/file_info_store_retention.go b/server/channels/store/sqlstore/file_info_store_retention.go
 new file mode 100644
-index 000000000000..4cdff0edc08a
+index 000000000000..b6d18db452a8
 --- /dev/null
 +++ b/server/channels/store/sqlstore/file_info_store_retention.go
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,143 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
@@ -3614,6 +4456,24 @@ index 000000000000..4cdff0edc08a
 +
 +	if err := fs.GetMaster().SelectBuilder(&files, query); err != nil {
 +		return nil, errors.Wrap(err, "failed to find FileInfos for retention")
++	}
++
++	return files, nil
++}
++
++func (fs SqlFileInfoStore) GetForRetentionByPostIds(postIDs []string) ([]*model.FileInfo, error) {
++	if len(postIDs) == 0 {
++		return nil, nil
++	}
++
++	files := []*model.FileInfo{}
++	query := fs.getQueryBuilder().
++		Select("Id", "PostId", "CreatorId", "CreateAt", "DeleteAt", "Path", "ThumbnailPath", "PreviewPath").
++		From("FileInfo").
++		Where("PostId = ANY(?)", pq.Array(postIDs))
++
++	if err := fs.GetMaster().SelectBuilder(&files, query); err != nil {
++		return nil, errors.Wrap(err, "failed to find FileInfos of deleted posts")
 +	}
 +
 +	return files, nil
@@ -3893,7 +4753,7 @@ index c5c23d9549fa..a18afe7e6be1 100644
  				WHERE Threads.PostId IS NULL
  				LIMIT ?
 diff --git a/server/channels/store/store.go b/server/channels/store/store.go
-index 3b7482a4b8b3..1cd538b05abf 100644
+index 3b7482a4b8b3..c117ffd453f4 100644
 --- a/server/channels/store/store.go
 +++ b/server/channels/store/store.go
 @@ -130,6 +130,8 @@ type RetentionPolicyStore interface {
@@ -3905,11 +4765,12 @@ index 3b7482a4b8b3..1cd538b05abf 100644
  }
  
  type TeamStore interface {
-@@ -797,6 +799,11 @@ type FileInfoStore interface {
+@@ -797,6 +799,12 @@ type FileInfoStore interface {
  	Search(rctx request.CTX, paramsList []*model.SearchParams, userID, teamID string, page, perPage int) (*model.FileInfoList, error)
  	CountAll() (int64, error)
  	GetFilesBatchForIndexing(startTime int64, startFileID string, includeDeleted bool, limit int) ([]*model.FileForIndexing, error)
 +	GetForRetention(cutoff, afterCreateAt int64, afterID string, limit int) ([]*model.FileInfo, error)
++	GetForRetentionByPostIds(postIDs []string) ([]*model.FileInfo, error)
 +	SoftDeleteByIds(ids []string, now int64) error
 +	PermanentDeleteByIds(ids []string) error
 +	GetPathsReferencedOutside(paths, excludeIDs []string) ([]string, error)
@@ -3917,7 +4778,7 @@ index 3b7482a4b8b3..1cd538b05abf 100644
  	ClearCaches()
  	GetStorageUsage(allowFromCache, includeDeleted bool) (int64, error)
  	// GetUptoNSizeFileTime returns the CreateAt time of the last accessible file with a running-total size upto n bytes.
-@@ -838,6 +845,7 @@ type JobStore interface {
+@@ -838,6 +846,7 @@ type JobStore interface {
  	// in-progress job with the same type matching the data filter.
  	SaveOnceByTypeAndData(job *model.Job, data map[string]string) (*model.Job, error)
  	UpdateOptimistically(job *model.Job, currentStatus string) (*model.Job, error)
@@ -3927,10 +4788,10 @@ index 3b7482a4b8b3..1cd538b05abf 100644
  	Get(rctx request.CTX, id string) (*model.Job, error)
 diff --git a/server/channels/store/storetest/data_retention_store.go b/server/channels/store/storetest/data_retention_store.go
 new file mode 100644
-index 000000000000..2f78fae04879
+index 000000000000..167c942e474e
 --- /dev/null
 +++ b/server/channels/store/storetest/data_retention_store.go
-@@ -0,0 +1,613 @@
+@@ -0,0 +1,647 @@
 +// Copyright (c) 2026-present the Mattermax authors.
 +// See LICENSE.txt for license information.
 +
@@ -3952,6 +4813,7 @@ index 000000000000..2f78fae04879
 +func TestDataRetentionStore(t *testing.T, rctx request.CTX, ss store.Store, s SqlStore) {
 +	t.Run("PolicyResolution", func(t *testing.T) { testDataRetentionPolicyResolution(t, rctx, ss, s) })
 +	t.Run("GetForRetention", func(t *testing.T) { testDataRetentionGetForRetention(t, rctx, ss, s) })
++	t.Run("GetForRetentionByPostIds", func(t *testing.T) { testDataRetentionGetForRetentionByPostIds(t, rctx, ss, s) })
 +	t.Run("SoftDeleteByIds", func(t *testing.T) { testDataRetentionSoftDeleteByIds(t, rctx, ss, s) })
 +	t.Run("PermanentDeleteByIds", func(t *testing.T) { testDataRetentionPermanentDeleteByIds(t, rctx, ss, s) })
 +	t.Run("GetPathsReferencedOutside", func(t *testing.T) { testDataRetentionGetPathsReferencedOutside(t, rctx, ss, s) })
@@ -4178,6 +5040,39 @@ index 000000000000..2f78fae04879
 +	files, err = ss.FileInfo().GetForRetention(1, 0, "", 1000)
 +	require.NoError(t, err)
 +	assert.Empty(t, files, "nothing is older than the cutoff")
++}
++
++func testDataRetentionGetForRetentionByPostIds(t *testing.T, rctx request.CTX, ss store.Store, s SqlStore) {
++	deletedPost, otherDeletedPost, keptPost := model.NewId(), model.NewId(), model.NewId()
++	mini := []byte("preview")
++	live := saveRetentionFile(t, rctx, ss, &model.FileInfo{PostId: deletedPost, CreateAt: 11, Content: "extracted text", MiniPreview: &mini})
++	hidden := saveRetentionFile(t, rctx, ss, &model.FileInfo{PostId: deletedPost, CreateAt: 12, DeleteAt: 50})
++	other := saveRetentionFile(t, rctx, ss, &model.FileInfo{PostId: otherDeletedPost, CreateAt: 13})
++	kept := saveRetentionFile(t, rctx, ss, &model.FileInfo{PostId: keptPost, CreateAt: 14})
++	draft := saveRetentionFile(t, rctx, ss, &model.FileInfo{CreateAt: 15})
++	t.Cleanup(func() {
++		for _, f := range []*model.FileInfo{live, hidden, other, kept, draft} {
++			require.NoError(t, ss.FileInfo().PermanentDelete(rctx, f.Id))
++		}
++	})
++
++	files, err := ss.FileInfo().GetForRetentionByPostIds([]string{deletedPost, otherDeletedPost})
++	require.NoError(t, err)
++	var got []string
++	for _, f := range files {
++		got = append(got, f.Id)
++		if f.Id == live.Id {
++			assert.Empty(t, f.Content)
++			assert.Nil(t, f.MiniPreview)
++			assert.Equal(t, live.Path, f.Path)
++			assert.Equal(t, deletedPost, f.PostId)
++		}
++	}
++	assert.ElementsMatch(t, []string{live.Id, hidden.Id, other.Id}, got, "files of the given posts, soft-deleted included")
++
++	files, err = ss.FileInfo().GetForRetentionByPostIds(nil)
++	require.NoError(t, err)
++	assert.Nil(t, files)
 +}
 +
 +func testDataRetentionSoftDeleteByIds(t *testing.T, rctx request.CTX, ss store.Store, s SqlStore) {
@@ -4545,10 +5440,10 @@ index 000000000000..2f78fae04879
 +	})
 +}
 diff --git a/server/channels/store/storetest/mocks/FileInfoStore.go b/server/channels/store/storetest/mocks/FileInfoStore.go
-index 8b17fd55657a..faca43b84bfe 100644
+index 8b17fd55657a..5e8d00578978 100644
 --- a/server/channels/store/storetest/mocks/FileInfoStore.go
 +++ b/server/channels/store/storetest/mocks/FileInfoStore.go
-@@ -262,6 +262,36 @@ func (_m *FileInfoStore) GetForPost(postID string, readFromMaster bool, includeD
+@@ -262,6 +262,66 @@ func (_m *FileInfoStore) GetForPost(postID string, readFromMaster bool, includeD
  	return r0, r1
  }
  
@@ -4582,10 +5477,40 @@ index 8b17fd55657a..faca43b84bfe 100644
 +	return r0, r1
 +}
 +
++// GetForRetentionByPostIds provides a mock function with given fields: postIDs
++func (_m *FileInfoStore) GetForRetentionByPostIds(postIDs []string) ([]*model.FileInfo, error) {
++	ret := _m.Called(postIDs)
++
++	if len(ret) == 0 {
++		panic("no return value specified for GetForRetentionByPostIds")
++	}
++
++	var r0 []*model.FileInfo
++	var r1 error
++	if rf, ok := ret.Get(0).(func([]string) ([]*model.FileInfo, error)); ok {
++		return rf(postIDs)
++	}
++	if rf, ok := ret.Get(0).(func([]string) []*model.FileInfo); ok {
++		r0 = rf(postIDs)
++	} else {
++		if ret.Get(0) != nil {
++			r0 = ret.Get(0).([]*model.FileInfo)
++		}
++	}
++
++	if rf, ok := ret.Get(1).(func([]string) error); ok {
++		r1 = rf(postIDs)
++	} else {
++		r1 = ret.Error(1)
++	}
++
++	return r0, r1
++}
++
  // GetForUser provides a mock function with given fields: userID
  func (_m *FileInfoStore) GetForUser(userID string) ([]*model.FileInfo, error) {
  	ret := _m.Called(userID)
-@@ -322,6 +352,36 @@ func (_m *FileInfoStore) GetFromMaster(id string) (*model.FileInfo, error) {
+@@ -322,6 +382,36 @@ func (_m *FileInfoStore) GetFromMaster(id string) (*model.FileInfo, error) {
  	return r0, r1
  }
  
@@ -4622,7 +5547,7 @@ index 8b17fd55657a..faca43b84bfe 100644
  // GetStorageUsage provides a mock function with given fields: allowFromCache, includeDeleted
  func (_m *FileInfoStore) GetStorageUsage(allowFromCache bool, includeDeleted bool) (int64, error) {
  	ret := _m.Called(allowFromCache, includeDeleted)
-@@ -459,6 +519,24 @@ func (_m *FileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime int64, l
+@@ -459,6 +549,24 @@ func (_m *FileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime int64, l
  	return r0, r1
  }
  
@@ -4647,7 +5572,7 @@ index 8b17fd55657a..faca43b84bfe 100644
  // PermanentDeleteByUser provides a mock function with given fields: rctx, userID
  func (_m *FileInfoStore) PermanentDeleteByUser(rctx request.CTX, userID string) (int64, error) {
  	ret := _m.Called(rctx, userID)
-@@ -571,6 +649,36 @@ func (_m *FileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (*model.Fi
+@@ -571,6 +679,36 @@ func (_m *FileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (*model.Fi
  	return r0, r1
  }
  
@@ -4684,7 +5609,7 @@ index 8b17fd55657a..faca43b84bfe 100644
  // Search provides a mock function with given fields: rctx, paramsList, userID, teamID, page, perPage
  func (_m *FileInfoStore) Search(rctx request.CTX, paramsList []*model.SearchParams, userID string, teamID string, page int, perPage int) (*model.FileInfoList, error) {
  	ret := _m.Called(rctx, paramsList, userID, teamID, page, perPage)
-@@ -619,6 +727,24 @@ func (_m *FileInfoStore) SetContent(rctx request.CTX, fileID string, content str
+@@ -619,6 +757,24 @@ func (_m *FileInfoStore) SetContent(rctx request.CTX, fileID string, content str
  	return r0
  }
  
@@ -4817,10 +5742,10 @@ index cf09c5e35c92..50ad2d120e76 100644
  func (_m *RetentionPolicyStore) GetChannelPoliciesCountForUser(userID string) (int64, error) {
  	ret := _m.Called(userID)
 diff --git a/server/channels/store/timerlayer/timerlayer.go b/server/channels/store/timerlayer/timerlayer.go
-index e1157f521194..118d84c9ddb8 100644
+index e1157f521194..46d600e1e0c6 100644
 --- a/server/channels/store/timerlayer/timerlayer.go
 +++ b/server/channels/store/timerlayer/timerlayer.go
-@@ -4843,6 +4843,22 @@ func (s *TimerLayerFileInfoStore) GetForPost(postID string, readFromMaster bool,
+@@ -4843,6 +4843,38 @@ func (s *TimerLayerFileInfoStore) GetForPost(postID string, readFromMaster bool,
  	return result, err
  }
  
@@ -4840,10 +5765,26 @@ index e1157f521194..118d84c9ddb8 100644
 +	return result, err
 +}
 +
++func (s *TimerLayerFileInfoStore) GetForRetentionByPostIds(postIDs []string) ([]*model.FileInfo, error) {
++	start := time.Now()
++
++	result, err := s.FileInfoStore.GetForRetentionByPostIds(postIDs)
++
++	elapsed := float64(time.Since(start)) / float64(time.Second)
++	if s.Root.Metrics != nil {
++		success := "false"
++		if err == nil {
++			success = "true"
++		}
++		s.Root.Metrics.ObserveStoreMethodDuration("FileInfoStore.GetForRetentionByPostIds", success, elapsed)
++	}
++	return result, err
++}
++
  func (s *TimerLayerFileInfoStore) GetForUser(userID string) ([]*model.FileInfo, error) {
  	start := time.Now()
  
-@@ -4875,6 +4891,22 @@ func (s *TimerLayerFileInfoStore) GetFromMaster(id string) (*model.FileInfo, err
+@@ -4875,6 +4907,22 @@ func (s *TimerLayerFileInfoStore) GetFromMaster(id string) (*model.FileInfo, err
  	return result, err
  }
  
@@ -4866,7 +5807,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerFileInfoStore) GetStorageUsage(allowFromCache bool, includeDeleted bool) (int64, error) {
  	start := time.Now()
  
-@@ -4970,6 +5002,22 @@ func (s *TimerLayerFileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime
+@@ -4970,6 +5018,22 @@ func (s *TimerLayerFileInfoStore) PermanentDeleteBatch(rctx request.CTX, endTime
  	return result, err
  }
  
@@ -4889,7 +5830,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerFileInfoStore) PermanentDeleteByUser(rctx request.CTX, userID string) (int64, error) {
  	start := time.Now()
  
-@@ -5050,6 +5098,22 @@ func (s *TimerLayerFileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (
+@@ -5050,6 +5114,22 @@ func (s *TimerLayerFileInfoStore) Save(rctx request.CTX, info *model.FileInfo) (
  	return result, err
  }
  
@@ -4912,7 +5853,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerFileInfoStore) Search(rctx request.CTX, paramsList []*model.SearchParams, userID string, teamID string, page int, perPage int) (*model.FileInfoList, error) {
  	start := time.Now()
  
-@@ -5082,6 +5146,22 @@ func (s *TimerLayerFileInfoStore) SetContent(rctx request.CTX, fileID string, co
+@@ -5082,6 +5162,22 @@ func (s *TimerLayerFileInfoStore) SetContent(rctx request.CTX, fileID string, co
  	return err
  }
  
@@ -4935,7 +5876,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerFileInfoStore) Upsert(rctx request.CTX, info *model.FileInfo) (*model.FileInfo, error) {
  	start := time.Now()
  
-@@ -6250,6 +6330,22 @@ func (s *TimerLayerJobStore) UpdateOptimistically(job *model.Job, currentStatus
+@@ -6250,6 +6346,22 @@ func (s *TimerLayerJobStore) UpdateOptimistically(job *model.Job, currentStatus
  	return result, err
  }
  
@@ -4958,7 +5899,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerJobStore) UpdateStatus(id string, status string) (*model.Job, error) {
  	start := time.Now()
  
-@@ -10087,6 +10183,22 @@ func (s *TimerLayerRetentionPolicyStore) Delete(id string) error {
+@@ -10087,6 +10199,22 @@ func (s *TimerLayerRetentionPolicyStore) Delete(id string) error {
  	return err
  }
  
@@ -4981,7 +5922,7 @@ index e1157f521194..118d84c9ddb8 100644
  func (s *TimerLayerRetentionPolicyStore) DeleteOrphanedRows(limit int) (int64, error) {
  	start := time.Now()
  
-@@ -10135,6 +10247,22 @@ func (s *TimerLayerRetentionPolicyStore) GetAll(offset int, limit int) ([]*model
+@@ -10135,6 +10263,22 @@ func (s *TimerLayerRetentionPolicyStore) GetAll(offset int, limit int) ([]*model
  	return result, err
  }
  

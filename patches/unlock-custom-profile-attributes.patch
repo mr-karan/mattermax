@@ -233,10 +233,10 @@ index 87d96dc2c423..f84ab8c6987e 100644
  
  	// add a valid license
 diff --git a/server/channels/app/server.go b/server/channels/app/server.go
-index 74bd6abd64be..5c82fba0b1f9 100644
+index 5a48eb70e8c3..c6c9e5e912b0 100644
 --- a/server/channels/app/server.go
 +++ b/server/channels/app/server.go
-@@ -323,13 +323,6 @@ func NewServer(options ...Option) (*Server, error) {
+@@ -326,13 +326,6 @@ func NewServer(options ...Option) (*Server, error) {
  		return nil, errors.Wrap(err, "failed to look up CPA property group")
  	}
  

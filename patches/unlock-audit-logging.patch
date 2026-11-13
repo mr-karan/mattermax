@@ -166,10 +166,10 @@ index 755475bf86ce..fe8efed4295a 100644
  	var lines []string
  
 diff --git a/server/channels/app/server.go b/server/channels/app/server.go
-index 5c82fba0b1f9..57ac547a7337 100644
+index c6c9e5e912b0..b2d42aab04c7 100644
 --- a/server/channels/app/server.go
 +++ b/server/channels/app/server.go
-@@ -527,20 +527,17 @@ func NewServer(options ...Option) (*Server, error) {
+@@ -537,20 +537,17 @@ func NewServer(options ...Option) (*Server, error) {
  	mlog.Info("Printing current working", mlog.String("directory", pwd))
  	mlog.Info("Loaded config", mlog.String("source", s.platform.DescribeConfig()))
  
@@ -192,7 +192,7 @@ index 5c82fba0b1f9..57ac547a7337 100644
  		mlog.Warn("AccessControlSettings.EnableAccessControlAuditLogging is enabled but no active audit log target is configured; ABAC policy-decision audit logging will have no effect. Enable ExperimentalAuditSettings.FileEnabled or configure an advanced audit logging target bound to an audit level.")
  	}
  
-@@ -552,13 +549,10 @@ func NewServer(options ...Option) (*Server, error) {
+@@ -562,13 +559,10 @@ func NewServer(options ...Option) (*Server, error) {
  		s.warnIfDeliveryAuditTargetMissing(newCfg)
  	})
  
