@@ -461,3 +461,13 @@ removed: `getManagedCategories` and the two managed-category checks in
 Still behind upstream's `ManagedChannelCategories` feature flag (default off,
 route registered at startup); enable it with
 `MM_FEATUREFLAGS_MANAGEDCHANNELCATEGORIES=true`.
+
+### unlock-email-notification-contents.patch
+
+2026-11-13. `EmailSettings.EmailNotificationContentsType` ("full" or
+"generic") applies without a license; "generic" emails omit the message text.
+Gates removed: `App.emailNotificationContentsType` in
+`app/notification_email.go` (immediate emails), the same check in
+`app/email/email_batching.go` (batched emails), and the System Console
+control's license check. Generic emails still name the channel, as upstream
+does.
