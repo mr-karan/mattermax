@@ -405,3 +405,23 @@ private address, firewalled): it also serves pprof and unauthenticated plugin
 metrics. The server logs a warning when it binds all interfaces. Keep
 `FeatureFlags.AggregatePluginMetrics` off, or use plugins that do not export
 Go runtime collectors.
+
+### data-retention.patch
+
+2026-11-13. Data retention works without a license: global message and file
+retention, custom team and channel message policies, the System Console pages
+and the deletion job. Upstream ships the API, store and console in AGPL code
+but leaves the policy service and the deletion job to enterprise code; this
+patch adds clean-room versions in `app/data_retention_policies.go`,
+`app/data_retention_job.go` and `jobs/data_retention/`, plus store methods in
+new sqlstore files. Nothing is deleted by default, and scheduled runs stay
+paused until an admin's manual run completes: only a job created through the
+API by an authenticated admin carries `trigger=manual`, and only that arms the
+schedule (Systems row `MattermaxDataRetentionArmedBy`). `CopyFileInfos` now
+copies through `FileInfoStore.SaveCopy`, which locks the live source row, so a
+copy can never lose its bytes to a concurrent retention run. Small upstream
+edits: `app/job.go`, `app/file.go`, `thread_store.go` (`DeleteOrphanedRows`
+deletes only the selected rows), `store.go` and the generated layers. License
+gates removed in `app/data_retention.go`, `config/client.go` and
+`admin_definition.tsx`. Not covered in v1: recaps, abandoned unattached
+uploads, audits, legal hold.
