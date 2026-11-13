@@ -425,3 +425,11 @@ deletes only the selected rows), `store.go` and the generated layers. License
 gates removed in `app/data_retention.go`, `config/client.go` and
 `admin_definition.tsx`. Not covered in v1: recaps, abandoned unattached
 uploads, audits, legal hold.
+
+### unlock-user-export.patch
+
+2026-11-13. The System Console user list CSV export works without a license.
+Removes the Professional check in `app/report.go` (`StartUsersBatchExport`)
+and the upgrade gate in the webapp `system_users_export` component, and drops
+its two now-unused tooltip strings from `en.json`. The export job, CSV worker
+and system-bot delivery are AGPL. System-admin authorization stays.

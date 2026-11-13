@@ -32,3 +32,4 @@ unlock-custom-terms-of-service.patch
 unlock-audit-logging.patch
 prometheus-metrics.patch
 data-retention.patch
+unlock-user-export.patch
