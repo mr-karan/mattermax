@@ -441,3 +441,13 @@ the admin's teammate name style overrides saved user preferences, and Settings
 > Display shows it as managed by the System Administrator. Gates removed in
 `admin_definition.tsx`, the teammate-name preference selector and the Display
 settings connector. The server already sent the setting without a license.
+
+### unlock-channel-banners.patch
+
+2026-11-13. Channel admins (and anyone granted
+`manage_public/private_channel_banner`) can set a channel banner, and members
+see it, without a license. Gates removed: `canEditChannelBanner` in
+`api4/channel.go`, the Enterprise Advanced checks in webapp
+`channel_banner.tsx` and `channel_settings_modal.tsx`, and the banner
+permissions in the System Console permissions tree. Classification banners and
+channel attributes stay gated.
